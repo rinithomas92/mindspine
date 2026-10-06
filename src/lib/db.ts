@@ -24,6 +24,22 @@ function sqlite() {
     store.sqlite = new DatabaseSync(path);
     store.sqlite.exec(sqliteSchema + careLinksSchema + physioSchema);
     if (!store.sqlite.prepare('PRAGMA table_info(notes)').all().some(c => c.name === 'assessment_json')) store.sqlite.exec("ALTER TABLE notes ADD COLUMN assessment_json TEXT NOT NULL DEFAULT ''");
+    if (store.sqlite.prepare('PRAGMA table_info(notes)').all().some(c => c.name === 'appointment_id' && c.notnull === 1)) {
+      // Rebuild without renaming the old table so referencing foreign keys retain their target.
+      const definition = sqliteSchema.match(/CREATE TABLE IF NOT EXISTS notes \([\s\S]*?\);/)![0]
+        .replace('IF NOT EXISTS notes', 'notes_patient_migration')
+        .replace('created_at TEXT', "assessment_json TEXT NOT NULL DEFAULT '', created_at TEXT");
+      store.sqlite.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;');
+      try {
+        store.sqlite.exec(definition);
+        store.sqlite.exec(`INSERT INTO notes_patient_migration(id,patient_id,practitioner_id,appointment_id,diagnosis,notes,plan,published,created_at,assessment_json)
+          SELECT id,patient_id,practitioner_id,appointment_id,diagnosis,notes,plan,published,created_at,assessment_json FROM notes;
+          DROP TABLE notes; ALTER TABLE notes_patient_migration RENAME TO notes;`);
+        if(store.sqlite.prepare('PRAGMA foreign_key_check').all().length)throw new Error('Clinical note migration failed integrity validation.');
+        store.sqlite.exec('COMMIT;');
+      } catch(error) {store.sqlite.exec('ROLLBACK;');throw error;}
+      finally {store.sqlite.exec('PRAGMA foreign_keys=ON;');}
+    }
     if (!store.sqlite.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'specialty')) store.sqlite.exec("ALTER TABLE users ADD COLUMN specialty TEXT NOT NULL DEFAULT ''");
   }
   return store.sqlite;
@@ -82,7 +98,7 @@ export async function transaction<T>(fn:()=>Promise<T>|T):Promise<T>{
     }finally{client.release();}
   }
 }
-export async function initializeDatabase(){if(connectionString)await pool().query(postgresSchema + careLinksSchema + physioSchema + "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ADD COLUMN IF NOT EXISTS assessment_json TEXT NOT NULL DEFAULT '';");else sqlite();}
+export async function initializeDatabase(){if(connectionString)await pool().query(postgresSchema + careLinksSchema + physioSchema + "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ADD COLUMN IF NOT EXISTS assessment_json TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ALTER COLUMN appointment_id DROP NOT NULL;");else sqlite();}
 export async function closeDatabase(){await store.pool?.end();store.sqlite?.close();delete store.pool;delete store.sqlite;}
 export function id(prefix:string){return `${prefix}-${randomUUID().slice(0,12)}`;}
 export async function audit(actor:string,action:string,entity:string){await run('INSERT INTO audit(id,actor_id,action,entity) VALUES (?,?,?,?)',id('log'),actor,action,entity);}

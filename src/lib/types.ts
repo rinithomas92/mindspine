@@ -27,7 +27,7 @@ export type ClinicalNote = {
     id: string;
     patient_id: string;
     practitioner_id: string;
-    appointment_id: string;
+    appointment_id: string | null;
     patient: string;
     practitioner: string;
     diagnosis: string;

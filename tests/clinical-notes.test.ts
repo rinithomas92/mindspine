@@ -1,0 +1,42 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {sqliteSchema,physioSchema} from '../src/lib/schema';
+import type {User} from '../src/lib/types';
+delete process.env.DATABASE_URL;delete process.env.VERCEL;
+process.env.DATABASE_PATH=join(mkdtempSync(join(tmpdir(),'notes-patient-test-')),'db.sqlite');
+const old=new DatabaseSync(process.env.DATABASE_PATH);
+old.exec(sqliteSchema.replace('appointment_id TEXT REFERENCES appointments(id), diagnosis','appointment_id TEXT NOT NULL REFERENCES appointments(id), diagnosis'));
+old.exec("ALTER TABLE notes ADD COLUMN assessment_json TEXT NOT NULL DEFAULT '';"+physioSchema);
+for(const [id,role] of [['c','practitioner'],['c2','practitioner'],['p','patient'],['p2','patient']])old.prepare('INSERT INTO users(id,name,email,password,role) VALUES (?,?,?,?,?)').run(id,id,id+'@example.test','unused',role);
+old.exec("INSERT INTO appointments(id,patient_id,practitioner_id,starts_at,service,amount) VALUES ('a','p','c','2026-10-01','Initial consultation',0); INSERT INTO notes(id,patient_id,practitioner_id,appointment_id,diagnosis,notes,plan) VALUES ('old','p','c','a','dx','old note','old plan'); INSERT INTO physio_records(id,patient_id,practitioner_id,assessment_id,kind,payload) VALUES ('old-physio','p','c','old','plan','{}');");old.close();
+const {one,run,all}=await import('../src/lib/db');
+const {saveClinicalNote}=await import('../src/lib/clinical-notes');
+const clinician=(await one<User>("SELECT * FROM users WHERE id='c'"))!;
+const draft={diagnosis:'Assessment',notes:'Visit narrative',plan:'Care plan',published:false};
+test('migration preserves existing notes and dependent rehab records while allowing patient-only notes',async()=>{
+ assert.equal((await one<{notes:string}>("SELECT notes FROM notes WHERE id='old'"))!.notes,'old note');
+ assert.equal((await all('PRAGMA foreign_key_check')).length,0);
+ const result=await saveClinicalNote(clinician,{...draft,patientId:'p'});
+ assert.equal((await one<{appointment_id:null}>('SELECT appointment_id FROM notes WHERE id=?',result.noteId))!.appointment_id,null);
+ assert.equal((await all('SELECT * FROM appointments')).length,1);
+ assert.equal((await all('SELECT * FROM invoices')).length,0);
+});
+test('patient and note creation is atomic and grants only patient access',async()=>{
+ const result=await saveClinicalNote(clinician,{...draft,newPatient:{name:'New patient',email:'new@example.test',password:'Demo-test-password',phone:''}});
+ assert.equal((await one<User>('SELECT * FROM users WHERE id=?',result.patientId))!.role,'patient');
+ assert(await one('SELECT * FROM care_links WHERE patient_id=? AND clinician_id=?',result.patientId,'c'));
+ await assert.rejects(saveClinicalNote(clinician,{...draft,newPatient:{name:'Duplicate',email:'new@example.test',password:'Demo-test-password'}}));
+ await run("CREATE TRIGGER fail_test_note BEFORE INSERT ON notes WHEN NEW.diagnosis='force rollback' BEGIN SELECT RAISE(ABORT,'test rollback'); END;");
+ await assert.rejects(saveClinicalNote(clinician,{...draft,diagnosis:'force rollback',newPatient:{name:'Rollback',email:'rollback@example.test',password:'Demo-test-password'}}));
+ assert.equal(await one("SELECT id FROM users WHERE email='rollback@example.test'"),undefined);
+});
+test('rejects unrelated patients, mismatched visits and non-clinician authors',async()=>{
+ await assert.rejects(saveClinicalNote(clinician,{...draft,patientId:'p2'}));
+ await assert.rejects(saveClinicalNote(clinician,{...draft,patientId:'p2',appointmentId:'a'}));
+ await assert.rejects(saveClinicalNote((await one<User>("SELECT * FROM users WHERE id='p'"))!,{...draft,patientId:'p'}));
+ await assert.rejects(saveClinicalNote(clinician,{...draft,patientId:'p',newPatient:{name:'No',email:'no@example.test',password:'Demo-test-password'}}));
+});

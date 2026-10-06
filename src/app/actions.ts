@@ -4,7 +4,7 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireUser, createSession, destroySession } from "@/lib/auth";
 import { hashPassword, verifyPassword } from "@/lib/password";
-import { assessmentSchema } from "@/lib/assessment";
+import {saveClinicalNote} from "@/lib/clinical-notes";
 import { authInput, matchesPortal } from "@/lib/auth-input";
 import { one, run, id, transaction, audit, notify } from "@/lib/db";
 import { createManagedUser, authorize, book, changeAppointment, appointmentFor, takeRateLimit, } from "@/lib/domain";
@@ -96,27 +96,7 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 break;
             }
             case "note": {
-                authorize(user.role === "practitioner");
-                const d = z
-                    .object({
-                    appointmentId: text,
-                    diagnosis: text,
-                    notes: z.string().trim().min(1).max(10000),
-                    plan: z.string().trim().min(1).max(10000),
-                    published: z.boolean(),
-                    assessment: assessmentSchema.optional(),
-                })
-                    .parse(payload);
-                if (d.assessment) authorize(user.specialty === "physiotherapist", "These evaluation forms require physiotherapist access.");
-                const a = await appointmentFor(user, d.appointmentId);
-                authorize(a.status !== "cancelled", "Cannot document a cancelled appointment.");
-                await transaction(async () => {
-                    const noteId = id("REC");
-                    await run("INSERT INTO notes(id,patient_id,practitioner_id,appointment_id,diagnosis,notes,plan,published,assessment_json) VALUES (?,?,?,?,?,?,?,?,?)", noteId, a.patient_id, user.id, a.id, d.diagnosis, d.notes, d.plan, Number(d.published), d.assessment ? JSON.stringify(d.assessment) : "");
-                    await audit(user.id, "clinical.note_created", noteId);
-                    if (d.published)
-                        await notify(a.patient_id, "Your care report is ready", "A new report has been released. View it securely in your care records.");
-                });
+                await saveClinicalNote(user,payload);
                 break;
             }
             case "publish": {
