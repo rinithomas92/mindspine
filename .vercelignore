@@ -1,0 +1,11 @@
+qa/
+data/
+deliverables/
+.git/
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+build_brd.py
+node_modules/
+.next/
