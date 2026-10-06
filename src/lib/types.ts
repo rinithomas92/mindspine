@@ -78,6 +78,7 @@ export type Audit = {
     created_at: string;
 };
 export type AppData = {
+    physioRecords: import("./physio").PhysioRecord[];
     generatedAt: string;
     user: User;
     users: User[];

@@ -1,3 +1,4 @@
+import {physioLines} from "@/lib/physio";
 import { assessmentLines } from "@/lib/assessment";
 import ExcelJS from "exceljs";
 import { currentUser } from "@/lib/auth";
@@ -44,6 +45,7 @@ export async function GET() {
         a.status,
     ]));
     if (user.role === "practitioner") {
+        sheet("Rehabilitation", ["Reference","Patient","Physiotherapist","Evaluation","Type","Released","Details"], data.physioRecords.map(r=>[r.id,r.patient,r.practitioner,r.assessment_id,r.kind,!!r.published,physioLines(r).join("\n")]));
         sheet("Patients", ["Name", "Email", "Phone", "Medical history"], data.patients.map((p) => [p.name, p.email, p.phone, p.history]));
         sheet("Clinical records", [
             "Reference",

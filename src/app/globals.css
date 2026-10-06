@@ -2479,3 +2479,17 @@ code {
 .physio-demo-access { margin-top:20px; padding:16px; border:1px dashed #a0baa7; border-radius:10px; background:#f0f5ec; }
 .physio-demo-access button { width:100%; display:flex; align-items:center; justify-content:center; gap:8px; border:0; background:transparent; color:#2b654b; font-weight:600; font-size:12px; padding:7px 0; }
 .physio-demo-access p { margin:8px 0 0; font-size:11px; color:#667b6b; }
+
+.physio-flow { display:grid; gap:24px; }
+.physio-intro { padding:24px; }
+.physio-intro h2,.physio-intro h3 { margin:0 0 12px; }
+.physio-intro p { margin:10px 0; }
+.physio-intro label { display:grid; gap:8px; margin:16px 0; }
+.physio-intro select,.physio-intro input:not([type=checkbox]),.physio-intro textarea { width:100%; padding:12px; border:1px solid #d6e1d9; border-radius:8px; background:white; color:#183f3c; font:inherit; }
+.physio-intro textarea { min-height:90px; }
+.physio-intro fieldset { border:0; padding:0; margin:0; min-width:0; }
+.physio-steps { display:flex; gap:12px; flex-wrap:wrap; padding-left:20px; }
+.physio-steps li { padding:8px; margin-right:18px; color:#246249; }
+.physio-actions { display:flex; flex-wrap:wrap; gap:12px; }
+.physio-timeline-item { border-top:1px solid #d6e1d9; padding:18px 0; overflow-wrap:anywhere; }
+.physio-intro .checkbox-label { display:flex; align-items:center; }

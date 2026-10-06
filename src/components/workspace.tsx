@@ -6,11 +6,12 @@ import type { LucideIcon } from "lucide-react";
 import type { AppData, Appointment, User } from "@/lib/types";
 import { logout, mutate } from "@/app/actions";
 import Brand from "./brand";
+import PhysioWorkflow from "./physio-workflow";
 import ClinicalForm from "./clinical-form";
 import {assessmentLines} from "@/lib/assessment";
 import { clinicianLabel } from "@/lib/clinician";
 import { Modal, Badge, Avatar, Empty, SectionHead, money, date, time, dayKey, } from "./ui";
-type Tab = "overview" | "appointments" | "patients" | "records" | "billing" | "reports" | "team" | "notifications" | "settings";
+type Tab = "physio" | "overview" | "appointments" | "patients" | "records" | "billing" | "reports" | "team" | "notifications" | "settings";
 type Dialog = {
     kind: "book";
     appointment?: Appointment;
@@ -69,7 +70,7 @@ const navItems: {
         id: "billing",
         label: "Billing & payments",
         icon: CreditCard,
-        roles: ["patient", "admin"],
+        roles: ["patient", "admin", "practitioner"],
     },
     {
         id: "reports",
@@ -77,6 +78,7 @@ const navItems: {
         icon: BarChart3,
         roles: ["patient", "practitioner", "admin"],
     },
+    { id: "physio", label: "Physiotherapy journey", icon: HeartPulse, roles: ["patient", "practitioner"] },
     { id: "team", label: "Team & access", icon: ShieldCheck, roles: ["admin"] },
 ];
 export default function Workspace({ data }: {
@@ -276,7 +278,7 @@ export default function Workspace({ data }: {
         <span className="nav-label">WORKSPACE</span>
         <nav aria-label="Main navigation">
           {navItems
-            .filter((n) => n.roles.includes(u.role))
+            .filter((n) => n.roles.includes(u.role) && (n.id !== "physio" || isPatient || u.specialty === "physiotherapist") && (n.id !== "billing" || !isDoctor || u.specialty === "physiotherapist"))
             .map((n) => (<button key={n.id} className={tab === n.id ? "active" : ""} onClick={() => navigate(n.id)}>
                 <n.icon size={19}/>
                 {n.label}
@@ -725,6 +727,7 @@ export default function Workspace({ data }: {
               {!data.patients.filter((p) => matches(p.name + " " + p.email))
                 .length && (<Empty title="No patients found" description="Patients appear here when they are registered or assigned to your appointments."/>)}
             </>)}
+          {tab === "physio" && <PhysioWorkflow data={data} pending={pending} onSave={payload=>action("physio",payload,false)} onEvaluation={()=>setDialog({kind:"note"})} onHistory={patient=>setDialog({kind:"patient",patient})} onBook={()=>openBook()} onBilling={()=>navigate("billing")}/>}
           {tab === "records" && (<>
               <div className="content-toolbar">
                 <SearchInput value={search} onChange={setSearch} placeholder="Search care records…"/>
@@ -785,7 +788,7 @@ export default function Workspace({ data }: {
                     <thead>
                       <tr>
                         <th>Invoice</th>
-                        {isAdmin && <th>Patient</th>}
+                        {!isPatient && <th>Patient</th>}
                         <th>Service</th>
                         <th>Amount</th>
                         <th>Status</th>
@@ -798,7 +801,7 @@ export default function Workspace({ data }: {
                             <strong>{i.id.toUpperCase().slice(0, 12)}</strong>
                             <small>{date(i.created_at)}</small>
                           </td>
-                          {isAdmin && <td>{i.patient}</td>}
+                          {!isPatient && <td>{i.patient}</td>}
                           <td>{i.service}</td>
                           <td className="amount">{money(i.amount)}</td>
                           <td>
@@ -1142,6 +1145,7 @@ export default function Workspace({ data }: {
               {!dialog.appointment && (<label>
                   Appointment type
                   <select aria-label="Appointment type" name="service" required>
+                    <option value="Physiotherapy session">Physiotherapy session · ₹1,000</option>
                     <option value="Initial consultation">
                       Initial consultation · ₹1,500
                     </option>

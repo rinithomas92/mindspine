@@ -1,3 +1,4 @@
+import {physioLines,physioTitle,type PhysioRecord} from "@/lib/physio";
 import { assessmentLines,readAssessment,formTitle } from "@/lib/assessment";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { currentUser } from "@/lib/auth";
@@ -37,11 +38,17 @@ export async function GET(request: Request) {
             ...assessmentLines(n.assessment_json),
         ];
     }
+    else if (type === "physio") {
+        const r=await one<PhysioRecord>("SELECT r.*,p.name patient,c.name practitioner FROM physio_records r JOIN users p ON p.id=r.patient_id JOIN users c ON c.id=r.practitioner_id WHERE r.id=?",id);
+        if((user.role==='practitioner'&&user.specialty!=='physiotherapist') || !r || !await canAccessPatient(user,r.patient_id) || (user.role==='patient'&&!r.published)) return Response.json({error:'Report not found.'},{status:404});
+        title=physioTitle(r.kind);
+        content=[`Patient: ${r.patient}`,`Physiotherapist: ${r.practitioner}`,`Record: ${r.id}`,`Related evaluation: ${r.assessment_id}`,`Created: ${r.created_at}`,`Status: ${r.published?'Released to patient':'Draft - clinical use only'}`,'',...physioLines(r)];
+    }
     else if (type === "invoice") {
         const i = await one<Invoice>("SELECT i.*,p.name patient,a.service FROM invoices i JOIN users p ON p.id=i.patient_id JOIN appointments a ON a.id=i.appointment_id WHERE i.id=?", id);
         if (!i ||
             !(user.role === "admin" ||
-                (user.role === "patient" && i.patient_id === user.id)))
+                (user.role === "patient" && i.patient_id === user.id) || (user.role === "practitioner" && user.specialty === "physiotherapist" && !!await one("SELECT id FROM appointments WHERE id=? AND practitioner_id=?",i.appointment_id,user.id))))
             return Response.json({ error: "Invoice not found." }, { status: 404 });
         title = "Patient invoice";
         content = [

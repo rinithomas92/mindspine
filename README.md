@@ -6,15 +6,13 @@ A Next.js application built from the MindSpine Business Requirements Document. I
 
 Live demo: **https://mindspine.vercel.app** (Vercel Hobby, Neon Free PostgreSQL). The local preview runs at **http://127.0.0.1:3000**.
 
-This workspace has a `.env.local` file and fictional seed data prepared for evaluation. Choose an account on the sign-in screen, then select **Sign in**.
+To prepare the local physiotherapist demo account, run `npm run demo:physio`, then choose **Try physiotherapist demo** and **Sign in**. Open **Physiotherapy journey** from the sidebar.
 
-| Role          | Email                   | Local demo password |
-| ------------- | ----------------------- | ------------------- |
-| Patient       | patient@mindspine.local | MindSpineDemo!2026  |
-| Practitioner  | doctor@mindspine.local  | MindSpineDemo!2026  |
-| Administrator | admin@mindspine.local   | MindSpineDemo!2026  |
+| Role | Email | Local demo password |
+| --- | --- | --- |
+| Physiotherapist | physio@mindspine.local | PhysioDemo!2026 |
 
-These credentials are for fictional demo data only, including the deployed demo. Disable `DEMO_MODE`, replace the seed database, and configure deployment controls before using real accounts or records.
+The setup creates or activates only this local demo account. It adds no patients or appointments, refuses PostgreSQL/Vercel/production execution, and does not overwrite an account with changed credentials. Use fictional information in the shared demo. Git does not store database accounts; run this command after a fresh checkout.
 
 ## Run on this Windows machine
 
@@ -32,14 +30,11 @@ Requires **Node.js 24 or newer**. The application uses `node:sqlite` and the Nod
 
 ```bash
 npm ci
-cp .env.example .env.local
-# Set SEED_PASSWORD in .env.local to at least 12 characters.
-# Optional: DEMO_MODE=true shows the local demo shortcuts.
-npm run seed
+npm run demo:physio
 npm run dev
 ```
 
-On PowerShell use `Copy-Item .env.example .env.local` instead of `cp` if preferred. The demo shortcuts fill the password shown above; if you choose a different seed password, enter it manually. Seeding refuses to overwrite an existing database.
+Local development defaults to `data/mindspine.sqlite`; no environment file is required. An optional `.env.local` can set `DATABASE_PATH`. Use `DATABASE_URL` for a separately configured PostgreSQL environment and run `npm run db:migrate` there; the demo setup intentionally refuses that environment.
 
 ```bash
 npm run typecheck

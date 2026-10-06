@@ -2,6 +2,7 @@ import { all, one, run, transaction, id, audit, notify } from "./db";
 import { hashPassword } from "./password";
 import type { User, Appointment } from "./types";
 export const SERVICES = [
+    { name: "Physiotherapy session", amount: 100000, duration: 60 },
     { name: "Initial consultation", amount: 150000, duration: 60 },
     { name: "Chiropractic adjustment", amount: 100000, duration: 60 },
     { name: "Progress review", amount: 80000, duration: 60 },

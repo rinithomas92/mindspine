@@ -9,3 +9,6 @@ deliverables/
 build_brd.py
 node_modules/
 .next/
+
+tmp/
+output/

@@ -11,3 +11,5 @@ export const postgresSchema = sqliteSchema
   .replace(/INSERT OR IGNORE INTO settings([\s\S]*?);/, 'INSERT INTO settings$1 ON CONFLICT (key) DO NOTHING;');
 
 export const careLinksSchema = "CREATE TABLE IF NOT EXISTS care_links (patient_id TEXT NOT NULL REFERENCES users(id), clinician_id TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(patient_id,clinician_id));";
+
+export const physioSchema = "CREATE TABLE IF NOT EXISTS physio_records (id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES users(id), practitioner_id TEXT NOT NULL REFERENCES users(id), assessment_id TEXT NOT NULL REFERENCES notes(id), kind TEXT NOT NULL CHECK(kind IN ('plan','session','discharge')), payload TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP); CREATE INDEX IF NOT EXISTS physio_patient ON physio_records(patient_id,created_at);";

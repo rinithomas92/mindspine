@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Pool, types, type PoolClient } from 'pg';
-import { sqliteSchema, postgresSchema, careLinksSchema } from './schema';
+import { sqliteSchema, postgresSchema, careLinksSchema, physioSchema } from './schema';
 
 // Never use ephemeral filesystem storage on Vercel.
 const databaseUrl = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : undefined;
@@ -22,7 +22,7 @@ function sqlite() {
     const path = resolve(/* turbopackIgnore: true */ process.env.DATABASE_PATH || './data/mindspine.sqlite');
     mkdirSync(dirname(path), { recursive: true });
     store.sqlite = new DatabaseSync(path);
-    store.sqlite.exec(sqliteSchema + careLinksSchema);
+    store.sqlite.exec(sqliteSchema + careLinksSchema + physioSchema);
     if (!store.sqlite.prepare('PRAGMA table_info(notes)').all().some(c => c.name === 'assessment_json')) store.sqlite.exec("ALTER TABLE notes ADD COLUMN assessment_json TEXT NOT NULL DEFAULT ''");
     if (!store.sqlite.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'specialty')) store.sqlite.exec("ALTER TABLE users ADD COLUMN specialty TEXT NOT NULL DEFAULT ''");
   }
@@ -82,7 +82,7 @@ export async function transaction<T>(fn:()=>Promise<T>|T):Promise<T>{
     }finally{client.release();}
   }
 }
-export async function initializeDatabase(){if(connectionString)await pool().query(postgresSchema + careLinksSchema + "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ADD COLUMN IF NOT EXISTS assessment_json TEXT NOT NULL DEFAULT '';");else sqlite();}
+export async function initializeDatabase(){if(connectionString)await pool().query(postgresSchema + careLinksSchema + physioSchema + "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ADD COLUMN IF NOT EXISTS assessment_json TEXT NOT NULL DEFAULT '';");else sqlite();}
 export async function closeDatabase(){await store.pool?.end();store.sqlite?.close();delete store.pool;delete store.sqlite;}
 export function id(prefix:string){return `${prefix}-${randomUUID().slice(0,12)}`;}
 export async function audit(actor:string,action:string,entity:string){await run('INSERT INTO audit(id,actor_id,action,entity) VALUES (?,?,?,?)',id('log'),actor,action,entity);}

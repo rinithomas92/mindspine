@@ -1,3 +1,4 @@
+import type {PhysioRecord} from "./physio";
 import { all, audit } from "./db";
 import { settings } from "./domain";
 import type { AppData, User, Appointment, ClinicalNote, Invoice, Notification, Slot, FileRecord, Audit, } from "./types";
@@ -17,11 +18,10 @@ export async function getAppData(user: User): Promise<AppData> {
     const notes = user.role === "admin"
         ? []
         : await all<ClinicalNote>(`SELECT n.*,p.name patient,c.name practitioner FROM notes n JOIN users p ON p.id=n.patient_id JOIN users c ON c.id=n.practitioner_id WHERE ${user.role === "patient" ? "n.patient_id=? AND n.published=1" : "n.patient_id IN (SELECT patient_id FROM appointments WHERE practitioner_id=? UNION SELECT patient_id FROM care_links WHERE clinician_id=?)"} ORDER BY n.created_at DESC`, ...user.role === "patient" ? [user.id] : [user.id,user.id]);
-    const invoices = user.role === "practitioner"
-        ? []
-        : await all<Invoice>(`SELECT i.*,p.name patient,a.service FROM invoices i JOIN users p ON p.id=i.patient_id JOIN appointments a ON a.id=i.appointment_id ${user.role === "patient" ? "WHERE i.patient_id=?" : ""} ORDER BY i.created_at DESC`, ...args);
+    const invoices = user.role === "practitioner" && user.specialty !== "physiotherapist" ? [] : await all<Invoice>(`SELECT i.*,p.name patient,a.service FROM invoices i JOIN users p ON p.id=i.patient_id JOIN appointments a ON a.id=i.appointment_id ${user.role === "patient" ? "WHERE i.patient_id=?" : user.role === "practitioner" ? "WHERE a.practitioner_id=?" : ""} ORDER BY i.created_at DESC`, ...args);
     const prefs = await settings();
     return {
+        physioRecords: user.role === "admin" || (user.role === "practitioner" && user.specialty !== "physiotherapist") ? [] : await all<PhysioRecord>(`SELECT r.*,p.name patient,c.name practitioner FROM physio_records r JOIN users p ON p.id=r.patient_id JOIN users c ON c.id=r.practitioner_id WHERE ${user.role==='patient' ? 'r.patient_id=? AND r.published=1' : 'r.patient_id IN (SELECT patient_id FROM appointments WHERE practitioner_id=? UNION SELECT patient_id FROM care_links WHERE clinician_id=?)'} ORDER BY r.created_at DESC,r.id DESC`,...user.role==='patient'?[user.id]:[user.id,user.id]),
         generatedAt: new Date().toISOString(),
         user: {
             id: user.id,

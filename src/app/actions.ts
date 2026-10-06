@@ -1,4 +1,5 @@
 "use server";
+import {savePhysioRecord} from "@/lib/physio-domain";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireUser, createSession, destroySession } from "@/lib/auth";
@@ -88,6 +89,10 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 })
                     .parse(payload);
                 await changeAppointment(user, d.id, d.action, d.slotId);
+                break;
+            }
+            case "physio": {
+                await savePhysioRecord(user,payload);
                 break;
             }
             case "note": {
