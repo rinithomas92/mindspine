@@ -113,15 +113,15 @@ test("database records have plain object prototypes for React serialization", as
 
 test('clinician-created patients are visible only to their care team and staff creation stays restricted', async()=>{
  const {createManagedUser}=await import('../src/lib/domain');
- const newId=await createManagedUser(doctor,{name:'New patient',email:'created@example.test',role:'patient',password:'A-strong-test-password',phone:'12345'});
+ const newId=await createManagedUser(doctor,{name:'New patient',email:'created@example.test',role:'patient',password:'A-strong-test-password1',phone:'12345'});
  assert.equal(await canAccessPatient(doctor,newId),true);
  const otherDoctor=(await one<User>('SELECT * FROM users WHERE id=?','c2'))!;
  assert.equal(await canAccessPatient(otherDoctor,newId),false);
  assert((await getAppData(doctor)).patients.some(p=>p.id===newId));
  assert(!(await getAppData(otherDoctor)).patients.some(p=>p.id===newId));
- await assert.rejects(()=>createManagedUser(doctor,{name:'Forbidden',email:'staff@example.test',role:'admin',password:'A-strong-test-password',phone:''}));
- await assert.rejects(()=>createManagedUser(patient,{name:'Forbidden',email:'someone@example.test',role:'patient',password:'A-strong-test-password',phone:''}));
- await assert.rejects(()=>createManagedUser(doctor,{name:'Duplicate',email:'created@example.test',role:'patient',password:'A-strong-test-password',phone:''}));
+ await assert.rejects(()=>createManagedUser(doctor,{name:'Forbidden',email:'staff@example.test',role:'admin',password:'A-strong-test-password1',phone:''}));
+ await assert.rejects(()=>createManagedUser(patient,{name:'Forbidden',email:'someone@example.test',role:'patient',password:'A-strong-test-password1',phone:''}));
+ await assert.rejects(()=>createManagedUser(doctor,{name:'Duplicate',email:'created@example.test',role:'patient',password:'A-strong-test-password1',phone:''}));
  assert.equal((await all('SELECT * FROM users WHERE email=?','created@example.test')).length,1);
 });
 

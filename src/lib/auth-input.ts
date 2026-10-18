@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const credentials = {
   email: z.string().trim().max(200).pipe(z.email("Enter a valid email address.")).transform(value => value.toLowerCase()),
-  password: z.string().min(1, "Enter your password.").max(128),
+  password: z.string().min(1, "Enter your password.").max(15, "Password must be 15 characters or fewer."),
 };
 
 export const authInput = z.discriminatedUnion("register", [
@@ -11,7 +11,7 @@ export const authInput = z.discriminatedUnion("register", [
     ...credentials,
     register: z.literal(true),
     name: z.string().trim().min(1, "Enter your full name.").max(100),
-    password: z.string().min(12, "Use at least 12 characters.").max(128),
+    password: z.string().min(8, "Use at least 8 characters, including letters and numbers.").max(15, "Password must be 15 characters or fewer.").regex(/^(?=.*[A-Za-z])(?=.*\d)/, "Use at least 8 characters, including letters and numbers."),
   }),
 ]);
 

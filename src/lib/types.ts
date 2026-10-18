@@ -7,7 +7,11 @@ export type User = {
     specialty?: string;
     active: number;
     phone: string;
+    date_of_birth: string;
+    gender: string;
+    referral_source: string;
     history: string;
+    avatar: string;
     created_at: string;
 };
 export type Appointment = {
@@ -21,6 +25,8 @@ export type Appointment = {
     status: "confirmed" | "completed" | "cancelled";
     reason: string;
     amount: number;
+    created_at: string;
+    updated_at: string;
 };
 export type ClinicalNote = {
     assessment_json?: string;
@@ -69,6 +75,10 @@ export type FileRecord = {
     mime: string;
     size: number;
     created_at: string;
+    uploaded_by: string;
+    appointment_id: string | null;
+    document_type: string;
+    description: string;
 };
 export type Audit = {
     id: string;

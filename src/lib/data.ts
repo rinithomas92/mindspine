@@ -2,7 +2,7 @@ import type {PhysioRecord} from "./physio";
 import { all, audit } from "./db";
 import { settings } from "./domain";
 import type { AppData, User, Appointment, ClinicalNote, Invoice, Notification, Slot, FileRecord, Audit, } from "./types";
-const publicUser = "id,name,email,role,specialty,active,phone,created_at";
+const publicUser = "id,name,email,role,specialty,active,phone,date_of_birth,gender,referral_source,avatar,created_at";
 export async function getAppData(user: User): Promise<AppData> {
     const apFilter = user.role === "admin"
         ? "1=1"
@@ -14,7 +14,7 @@ export async function getAppData(user: User): Promise<AppData> {
     const patients = user.role === "patient"
         ? [user]
         : user.role === "admin"
-            ? await all<User>(`SELECT ${publicUser},'' history FROM users WHERE role='patient' ORDER BY name`) : await all<User>(`SELECT ${publicUser},history FROM users WHERE role='patient' AND id IN (SELECT patient_id FROM appointments WHERE practitioner_id=? UNION SELECT patient_id FROM care_links WHERE clinician_id=?) ORDER BY name`, user.id, user.id);
+            ? await all<User>(`SELECT ${publicUser},'' history FROM users WHERE role='patient' AND active=1 ORDER BY name`) : await all<User>(`SELECT ${publicUser},history FROM users WHERE role='patient' AND active=1 AND id IN (SELECT patient_id FROM appointments WHERE practitioner_id=? UNION SELECT patient_id FROM care_links WHERE clinician_id=?) ORDER BY name`, user.id, user.id);
     const notes = user.role === "admin"
         ? []
         : await all<ClinicalNote>(`SELECT n.*,p.name patient,c.name practitioner FROM notes n JOIN users p ON p.id=n.patient_id JOIN users c ON c.id=n.practitioner_id WHERE ${user.role === "patient" ? "n.patient_id=? AND n.published=1" : "n.patient_id IN (SELECT patient_id FROM appointments WHERE practitioner_id=? UNION SELECT patient_id FROM care_links WHERE clinician_id=?)"} ORDER BY n.created_at DESC`, ...user.role === "patient" ? [user.id] : [user.id,user.id]);
@@ -31,7 +31,11 @@ export async function getAppData(user: User): Promise<AppData> {
             specialty: user.specialty,
             active: user.active,
             phone: user.phone,
+            date_of_birth: user.date_of_birth,
+            gender: user.gender,
+            referral_source: user.referral_source,
             history: user.history,
+            avatar: user.avatar,
             created_at: user.created_at,
         },
         appointments,
@@ -43,19 +47,23 @@ export async function getAppData(user: User): Promise<AppData> {
             specialty: p.specialty,
             active: p.active,
             phone: p.phone,
+            date_of_birth: p.date_of_birth,
+            gender: p.gender,
+            referral_source: p.referral_source,
             history: p.history,
+            avatar: p.avatar,
             created_at: p.created_at,
         })),
         notes,
         invoices,
         users: user.role === "admin"
             ? await all<User>(`SELECT ${publicUser},'' history FROM users ORDER BY role,name`) : [],
-        practitioners: await all<User>(`SELECT id,name,role,specialty,active,'' email,'' phone,'' history,created_at FROM users WHERE role='practitioner' AND active=1`),
+        practitioners: await all<User>(`SELECT id,name,role,specialty,active,'' email,'' phone,'' date_of_birth,'' gender,'' referral_source,'' history,avatar,created_at FROM users WHERE role='practitioner' AND active=1`),
         notifications: await all<Notification>("SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100", user.id),
         slots: await all<Slot>(`SELECT s.*,u.name practitioner,EXISTS(SELECT 1 FROM appointments a WHERE a.practitioner_id=s.practitioner_id AND a.starts_at=s.starts_at AND a.status!='cancelled') booked FROM slots s JOIN users u ON u.id=s.practitioner_id WHERE u.active=1 AND s.starts_at>? ${user.role === "practitioner" ? "AND s.practitioner_id=?" : ""} ORDER BY s.starts_at LIMIT 500`, new Date().toISOString(), ...(user.role === "practitioner" ? [user.id] : [])),
         files: user.role === "admin"
             ? []
-            : await all<FileRecord>(`SELECT id,patient_id,name,mime,size,created_at FROM files WHERE ${user.role === "patient" ? "patient_id=?" : "patient_id IN (SELECT patient_id FROM appointments WHERE practitioner_id=? UNION SELECT patient_id FROM care_links WHERE clinician_id=?)"} ORDER BY created_at DESC`, ...user.role === "patient" ? [user.id] : [user.id,user.id]),
+            : await all<FileRecord>(`SELECT f.id,f.patient_id,f.name,f.mime,f.size,f.created_at,f.appointment_id,f.document_type,f.description,u.name uploaded_by FROM files f JOIN users u ON u.id=f.uploaded_by WHERE ${user.role === "patient" ? "f.patient_id=?" : "f.patient_id IN (SELECT patient_id FROM appointments WHERE practitioner_id=? UNION SELECT patient_id FROM care_links WHERE clinician_id=?)"} ORDER BY f.created_at DESC`, ...user.role === "patient" ? [user.id] : [user.id,user.id]),
         audits: user.role === "admin"
             ? await all<Audit>("SELECT a.id,u.name actor,a.action,a.entity,a.created_at FROM audit a JOIN users u ON u.id=a.actor_id ORDER BY a.rowid DESC LIMIT 60") : [],
         settings: {
