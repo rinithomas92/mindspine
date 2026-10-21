@@ -123,9 +123,7 @@ export default function PhysioWorkflow({data, pending, onSave, onDeleteRecord, o
 
  if (!patient) {
   return <section className="physio-flow journey-screen">
-   <div className="panel physio-intro journey-intro-panel">
-    {!patientView && patientSearch}
-   </div>
+   {!patientView && <div className="panel physio-intro journey-intro-panel">{patientSearch}</div>}
    <Empty title="Choose a patient to begin" description="Search and select a patient to view their physiotherapy journey, record sessions and plan follow-ups." />
   </section>;
  }
@@ -141,9 +139,7 @@ export default function PhysioWorkflow({data, pending, onSave, onDeleteRecord, o
  </div>;
 
  return <section className="physio-flow journey-screen">
-  <div className="panel physio-intro journey-intro-panel">
-   {!patientView && patientSearch}
-  </div>
+  {!patientView && <div className="panel physio-intro journey-intro-panel">{patientSearch}</div>}
 
   <section className="panel journey-patient-card">
    <div className="person detail-person"><Avatar name={patient.name} size="large" /><div><h3>{patient.name}</h3><p>{patientCode(patient)}{patient.gender ? ' · ' + patient.gender : ''}{age ? ' · ' + age + ' yrs' : ''}{patient.phone ? ' · ' + patient.phone : ''}</p></div></div>

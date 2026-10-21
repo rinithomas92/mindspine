@@ -188,6 +188,8 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                     gender: z.string().trim().max(40).optional().default(""),
                     history: z.string().trim().max(5000).optional().default(""),
                     referral_source: z.string().trim().max(100).optional().default(""),
+                    avatar: z.string().max(3_000_000).optional().default(""),
+                    practitioner_logo: z.string().max(3_000_000).optional().default(""),
                 })
                     .parse(payload);
                 const target = await one<User>("SELECT * FROM users WHERE id=? AND role='patient' AND active=1", d.id);
@@ -195,6 +197,10 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 authorize(user.role === "admin" || await canAccessPatient(user, d.id), "You do not have access to this patient.");
                 await transaction(async () => {
                     await run("UPDATE users SET name=?,phone=?,date_of_birth=?,gender=?,history=?,referral_source=? WHERE id=?", d.name, d.phone, d.date_of_birth, d.gender, d.history, d.referral_source, d.id);
+                    if (d.avatar === "__REMOVE__")
+                        await run("UPDATE users SET avatar='' WHERE id=?", d.id);
+                    else if (d.avatar)
+                        await run("UPDATE users SET avatar=? WHERE id=?", d.avatar, d.id);
                     await audit(user.id, "patient.updated", d.id);
                 });
                 break;
@@ -226,9 +232,35 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                     date_of_birth: dob,
                     gender: z.string().trim().max(40).optional().default(""),
                     referral_source: z.string().trim().max(100).optional().default(""),
+                    avatar: z.string().max(3_000_000).optional().default(""),
+                    practitioner_logo: z.string().max(3_000_000).optional().default(""),
                 })
                     .parse(payload);
                 await createManagedUser(user,d);
+                break;
+            }
+            case "staffProfile": {
+                authorize(user.role === "admin");
+                const d = z
+                    .object({
+                    id: text,
+                    name: text,
+                    phone: z.string().trim().regex(/^(\d{10})?$/, "Enter a valid 10-digit phone number.").optional().default(""),
+                    specialty: z.enum(["psychologist", "physiotherapist", ""]).optional().default(""),
+                    practitioner_logo: z.string().max(3_000_000).optional().default(""),
+                })
+                    .parse(payload);
+                const target = await one<User>("SELECT * FROM users WHERE id=? AND active=1", d.id);
+                authorize(target, "User not found.");
+                authorize(target!.role === "admin" || target!.role === "practitioner", "Only clinician and administrator accounts can be edited here.");
+                await transaction(async () => {
+                    await run("UPDATE users SET name=?,phone=? WHERE id=?", d.name, d.phone, d.id);
+                    if (target!.role === "practitioner" && d.specialty)
+                        await run("UPDATE users SET specialty=? WHERE id=?", d.specialty, d.id);
+                    if (target!.role === "practitioner" && d.practitioner_logo)
+                        await run("UPDATE users SET practitioner_logo=? WHERE id=?", d.practitioner_logo, d.id);
+                    await audit(user.id, "user.updated", d.id);
+                });
                 break;
             }
             case "specialty": {
@@ -297,10 +329,10 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 break;
             }
             case "deletePatient": {
+                authorize(user.role === "admin" || user.role === "practitioner");
                 const d = z.object({ id: text }).parse(payload);
                 const target = await one<User>("SELECT * FROM users WHERE id=? AND role='patient'", d.id);
                 authorize(target, "Patient not found.");
-                authorize(user.role === "admin" || await canAccessPatient(user, d.id), "You do not have access to this patient.");
                 await transaction(async () => {
                     const future = await all<{ id: string; practitioner_id: string }>("SELECT id,practitioner_id FROM appointments WHERE patient_id=? AND status='confirmed' AND starts_at>?", d.id, new Date().toISOString());
                     for (const a of future) {
@@ -327,6 +359,28 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 });
                 break;
             }
+            case "deleteStaffUser": {
+                authorize(user.role === "admin");
+                const d = z.object({ id: text }).parse(payload);
+                authorize(d.id !== user.id, "You cannot delete your own account.");
+                const target = await one<User>("SELECT * FROM users WHERE id=? AND (role='practitioner' OR role='admin')", d.id);
+                authorize(target, "User not found.");
+                await transaction(async () => {
+                    if (target!.role === "practitioner") {
+                        const future = await all<{ id: string; patient_id: string }>("SELECT id,patient_id FROM appointments WHERE practitioner_id=? AND status='confirmed' AND starts_at>?", d.id, new Date().toISOString());
+                        for (const a of future) {
+                            await run("UPDATE appointments SET status='cancelled' WHERE id=?", a.id);
+                            await run("UPDATE invoices SET status='void' WHERE appointment_id=? AND status='unpaid'", a.id);
+                            await notify(a.patient_id, "Schedule updated", "Your appointment has been cancelled because the clinician is no longer available.");
+                        }
+                        await run("DELETE FROM slots WHERE practitioner_id=?", d.id);
+                    }
+                    await run("UPDATE users SET active=0 WHERE id=?", d.id);
+                    await run("DELETE FROM sessions WHERE user_id=?", d.id);
+                    await audit(user.id, "user.deleted", d.id);
+                });
+                break;
+            }
             case "slot": {
                 authorize(user.role !== "patient");
                 const d = z
@@ -337,7 +391,11 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 const time = new Date(d.startsAt);
                 authorize(time.getTime() > Date.now(), "Choose a future time.");
                 authorize(time.getUTCMinutes() === 30 && time.getUTCSeconds() === 0, "Use an hourly clinic slot in India time, such as 10:00.");
-                authorize(!await one("SELECT id FROM slots WHERE practitioner_id=? AND starts_at=?", d.practitionerId, d.startsAt), "A slot already exists for this clinician at this time.");
+                const existingSlot = await one("SELECT id FROM slots WHERE practitioner_id=? AND starts_at=?", d.practitionerId, d.startsAt);
+                if (existingSlot) {
+                    const hasAppointment = await one("SELECT id FROM appointments WHERE practitioner_id=? AND starts_at=? AND status!='cancelled'", d.practitionerId, d.startsAt);
+                    authorize(false, hasAppointment ? "This time is already booked by a patient appointment." : "A slot already exists for this clinician at this time.");
+                }
                 await run("INSERT INTO slots VALUES (?,?,?)", id("SLT"), d.practitionerId, d.startsAt);
                 await audit(user.id, "schedule.slot_added", d.practitionerId);
                 break;

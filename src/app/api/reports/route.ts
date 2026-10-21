@@ -44,12 +44,12 @@ export async function GET(request: Request) {
     let meta: [string, string][] = [];
     let title = "";
     if (type === "note") {
-        const n = await one<ClinicalNote>("SELECT n.*,p.name patient,c.name practitioner FROM notes n JOIN users p ON p.id=n.patient_id JOIN users c ON c.id=n.practitioner_id WHERE n.id=?", id);
+        const n = await one<ClinicalNote & { practitioner_logo?: string }>("SELECT n.*,p.name patient,c.name practitioner,c.practitioner_logo FROM notes n JOIN users p ON p.id=n.patient_id JOIN users c ON c.id=n.practitioner_id WHERE n.id=?", id);
         if (!n ||
             !await canAccessPatient(user, n.patient_id) ||
             (user.role === "patient" && !n.published))
             return Response.json({ error: "Report not found." }, { status: 404 });
-        const { bytes } = await renderCareReport(noteCareReport(n), await settings());
+        const { bytes } = await renderCareReport(noteCareReport(n), { ...(await settings()), logo: n.practitioner_logo });
         await audit(user.id, "report.downloaded", id);
         return new Response(new Uint8Array(bytes), {
             headers: {
@@ -60,9 +60,9 @@ export async function GET(request: Request) {
         });
     }
     else if (type === "physio") {
-        const r=await one<PhysioRecord>("SELECT r.*,p.name patient,c.name practitioner FROM physio_records r JOIN users p ON p.id=r.patient_id JOIN users c ON c.id=r.practitioner_id WHERE r.id=?",id);
+        const r=await one<PhysioRecord & { practitioner_logo?: string }>("SELECT r.*,p.name patient,c.name practitioner,c.practitioner_logo FROM physio_records r JOIN users p ON p.id=r.patient_id JOIN users c ON c.id=r.practitioner_id WHERE r.id=?",id);
         if((user.role==='practitioner'&&user.specialty!=='physiotherapist') || !r || !await canAccessPatient(user,r.patient_id) || (user.role==='patient'&&!r.published)) return Response.json({error:'Report not found.'},{status:404});
-        const { bytes } = await renderCareReport(physioCareReport(r), await settings());
+        const { bytes } = await renderCareReport(physioCareReport(r), { ...(await settings()), logo: r.practitioner_logo });
         await audit(user.id, "report.downloaded", id);
         return new Response(new Uint8Array(bytes), {
             headers: {
@@ -73,12 +73,12 @@ export async function GET(request: Request) {
         });
     }
     else if (type === "invoice") {
-        const i = await one<Invoice>("SELECT i.*,p.name patient,a.service FROM invoices i JOIN users p ON p.id=i.patient_id JOIN appointments a ON a.id=i.appointment_id WHERE i.id=?", id);
+        const i = await one<Invoice & { practitioner_logo?: string }>("SELECT i.*,p.name patient,a.service,c.practitioner_logo FROM invoices i JOIN users p ON p.id=i.patient_id JOIN appointments a ON a.id=i.appointment_id JOIN users c ON c.id=a.practitioner_id WHERE i.id=?", id);
         if (!i ||
             !(user.role === "admin" ||
                 (user.role === "patient" && i.patient_id === user.id) || (user.role === "practitioner" && user.specialty === "physiotherapist" && !!await one("SELECT id FROM appointments WHERE id=? AND practitioner_id=?",i.appointment_id,user.id))))
             return Response.json({ error: "Invoice not found." }, { status: 404 });
-        const { bytes } = await renderInvoiceReport(i, await settings());
+        const { bytes } = await renderInvoiceReport(i, { ...(await settings()), logo: i.practitioner_logo });
         await audit(user.id, "report.downloaded", id);
         return new Response(new Uint8Array(bytes), {
             headers: {

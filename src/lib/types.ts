@@ -12,7 +12,9 @@ export type User = {
     referral_source: string;
     history: string;
     avatar: string;
+    practitioner_logo?: string;
     created_at: string;
+    clinicianIds?: string[];
 };
 export type Appointment = {
     id: string;

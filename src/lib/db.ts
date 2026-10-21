@@ -41,7 +41,7 @@ function sqlite() {
       finally {store.sqlite.exec('PRAGMA foreign_keys=ON;');}
     }
     if (!store.sqlite.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'specialty')) store.sqlite.exec("ALTER TABLE users ADD COLUMN specialty TEXT NOT NULL DEFAULT ''");
-    for (const column of ['date_of_birth','gender','referral_source','avatar']) {
+    for (const column of ['date_of_birth','gender','referral_source','avatar','practitioner_logo']) {
       if (!store.sqlite.prepare('PRAGMA table_info(users)').all().some(c => c.name === column)) store.sqlite.exec(`ALTER TABLE users ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
     }
     for (const column of ['document_type','description']) {
@@ -54,6 +54,12 @@ function sqlite() {
       store.sqlite.exec("ALTER TABLE appointments ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
       store.sqlite.exec("UPDATE appointments SET updated_at=created_at");
     }
+  }
+  // Hot reload can retain the shared SQLite handle across module updates. Keep
+  // this guard outside the initial-open block so newly added columns are also
+  // applied to an already-open development database.
+  if (!store.sqlite.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'practitioner_logo')) {
+    store.sqlite.exec("ALTER TABLE users ADD COLUMN practitioner_logo TEXT NOT NULL DEFAULT ''");
   }
   return store.sqlite;
 }
@@ -111,7 +117,7 @@ export async function transaction<T>(fn:()=>Promise<T>|T):Promise<T>{
     }finally{client.release();}
   }
 }
-export async function initializeDatabase(){if(connectionString)await pool().query(postgresSchema + careLinksSchema + physioSchema + "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty TEXT NOT NULL DEFAULT ''; ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth TEXT NOT NULL DEFAULT ''; ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT NOT NULL DEFAULT ''; ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_source TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ADD COLUMN IF NOT EXISTS assessment_json TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ALTER COLUMN appointment_id DROP NOT NULL;");else sqlite();}
+export async function initializeDatabase(){if(connectionString)await pool().query(postgresSchema + careLinksSchema + physioSchema + "ALTER TABLE users ADD COLUMN IF NOT EXISTS specialty TEXT NOT NULL DEFAULT ''; ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth TEXT NOT NULL DEFAULT ''; ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT NOT NULL DEFAULT ''; ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_source TEXT NOT NULL DEFAULT ''; ALTER TABLE users ADD COLUMN IF NOT EXISTS practitioner_logo TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ADD COLUMN IF NOT EXISTS assessment_json TEXT NOT NULL DEFAULT ''; ALTER TABLE notes ALTER COLUMN appointment_id DROP NOT NULL;");else sqlite();}
 export async function closeDatabase(){await store.pool?.end();store.sqlite?.close();delete store.pool;delete store.sqlite;}
 export function id(prefix:string){return `${prefix}-${randomUUID().slice(0,12)}`;}
 export async function audit(actor:string,action:string,entity:string){await run('INSERT INTO audit(id,actor_id,action,entity) VALUES (?,?,?,?)',id('log'),actor,action,entity);}

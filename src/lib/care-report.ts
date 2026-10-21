@@ -121,15 +121,41 @@ export function wrapReportText(value: string, font: PDFFont, size: number, width
 }
 
 export type ReportTextBox = { page: number; text: string; x: number; top: number; width: number; height: number; zone: 'header' | 'body' | 'footer' };
-export async function renderCareReport(report: CareReport, clinic: { address?: string; clinicName?: string }) {
+async function defaultLogo() {
+  return { bytes: await readFile(join(process.cwd(), 'public/reports/mindspine-logo.png')), type: 'png' as const };
+}
+// Returns the clinician's uploaded practice logo when one is on file and pdf-lib can embed it
+// (PNG or JPEG only — pdf-lib has no native WEBP support), falling back to the MindSpine mark
+// otherwise. Embedding is attempted here too, so a corrupted/undecodable image never reaches
+// the caller as an uncaught exception — it just falls back like a missing logo would.
+async function brandLogo(pdf: PDFDocument, logoData?: string) {
+  const prefixes = { "data:image/png;base64,": "png", "data:image/jpeg;base64,": "jpeg" } as const;
+  for (const [prefix, type] of Object.entries(prefixes) as [string, 'png' | 'jpeg'][]) {
+    if (!logoData?.startsWith(prefix)) continue;
+    try {
+      const raw = Buffer.from(logoData.slice(prefix.length), "base64");
+      // Buffer.from(base64) can return a view into Node's shared allocation pool (anything under
+      // ~4KB) with a non-zero byteOffset. pdf-lib's embedders do `new DataView(bytes.buffer)` and
+      // ignore byteOffset, so a pooled buffer silently reads neighbouring pool data instead of the
+      // image — copy out to a fresh, offset-0 buffer so pdf-lib always sees exactly this image.
+      const bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength).slice();
+      return type === 'png' ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
+    } catch {
+      break; // Stored image can't be decoded — fall back to the brand mark below.
+    }
+  }
+  const fallback = await defaultLogo();
+  return pdf.embedPng(fallback.bytes);
+}
+
+export async function renderCareReport(report: CareReport, clinic: { address?: string; clinicName?: string; logo?: string }) {
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
-  const [logoBytes, regularBytes, boldBytes] = await Promise.all([
-    readFile(join(process.cwd(), 'public/reports/mindspine-logo.png')),
+  const [regularBytes, boldBytes] = await Promise.all([
     readFile(join(process.cwd(), 'public/reports/dm-sans-regular.woff')),
     readFile(join(process.cwd(), 'public/reports/dm-sans-bold.woff')),
   ]);
-  const logo = await pdf.embedPng(logoBytes);
+  const logo = await brandLogo(pdf, clinic.logo);
   const font = await pdf.embedFont(regularBytes, { subset: true });
   const bold = await pdf.embedFont(boldBytes, { subset: true });
   const display = await pdf.embedFont(StandardFonts.TimesRomanBold);
@@ -319,15 +345,14 @@ export async function renderCareReport(report: CareReport, clinic: { address?: s
   return { bytes: await pdf.save(), pageCount: total, textBoxes: boxes };
 }
 
-export async function renderInvoiceReport(invoice: Invoice, clinic: { address?: string; clinicName?: string }) {
+export async function renderInvoiceReport(invoice: Invoice, clinic: { address?: string; clinicName?: string; logo?: string }) {
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
-  const [logoBytes, regularBytes, boldBytes] = await Promise.all([
-    readFile(join(process.cwd(), 'public/reports/mindspine-logo.png')),
+  const [regularBytes, boldBytes] = await Promise.all([
     readFile(join(process.cwd(), 'public/reports/dm-sans-regular.woff')),
     readFile(join(process.cwd(), 'public/reports/dm-sans-bold.woff')),
   ]);
-  const logo = await pdf.embedPng(logoBytes);
+  const logo = await brandLogo(pdf, clinic.logo);
   const font = await pdf.embedFont(regularBytes, { subset: true });
   const bold = await pdf.embedFont(boldBytes, { subset: true });
   const display = await pdf.embedFont(StandardFonts.TimesRomanBold);

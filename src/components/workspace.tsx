@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, CalendarDays, Users, ClipboardList, CreditCard, BarChart3, Settings, Bell, Search, Plus, ArrowUpRight, ArrowRight, ArrowLeft, Clock3, ChevronRight, ChevronLeft, Download, FileText, LogOut, HeartPulse, Check, Menu, X, ShieldCheck, MapPin, CalendarCheck, TrendingUp, SlidersHorizontal, Mail, ExternalLink, Upload, Paperclip, Trash2, Pencil, Folder, MoreVertical, Camera, Eye, EyeOff, MessageCircle, } from "lucide-react";
+import { LayoutDashboard, CalendarDays, Users, ClipboardList, CreditCard, BarChart3, Settings, Bell, Search, Plus, ArrowUpRight, ArrowRight, ArrowLeft, Clock3, ChevronRight, ChevronLeft, ChevronDown, Download, FileText, LogOut, HeartPulse, Check, Menu, X, ShieldCheck, MapPin, CalendarCheck, TrendingUp, SlidersHorizontal, Mail, ExternalLink, Upload, Paperclip, Trash2, Pencil, Folder, MoreVertical, Camera, Eye, EyeOff, MessageCircle, Building2, } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { AppData, Appointment, ClinicalNote, FileRecord, User } from "@/lib/types";
+import type { AppData, Appointment, ClinicalNote, FileRecord, Invoice, User } from "@/lib/types";
 import { logout, mutate } from "@/app/actions";
 import Brand from "./brand";
 import PhysioWorkflow from "./physio-workflow";
@@ -14,6 +14,58 @@ import {readAssessment} from "@/lib/assessment";
 import { clinicianLabel } from "@/lib/clinician";
 import { Modal, Badge, Avatar, Empty, SectionHead, money, date, time, dayKey, } from "./ui";
 type Tab = "physio" | "overview" | "appointments" | "patients" | "records" | "billing" | "reports" | "team" | "notifications" | "settings";
+function AdminReportsScreen({ data }: { data: AppData }) {
+    const [scope, setScope] = useState("clinic");
+    const [selectedClinician, setSelectedClinician] = useState("");
+    const [selectedPatient, setSelectedPatient] = useState("");
+    const [clinicianQuery, setClinicianQuery] = useState("");
+    const [patientQuery, setPatientQuery] = useState("");
+    const [reportStart, setReportStart] = useState("");
+    const [reportEnd, setReportEnd] = useState("");
+    const [reportAppointmentStatus, setReportAppointmentStatus] = useState("all");
+    const [reportPaymentStatus, setReportPaymentStatus] = useState("all");
+    const [preview, setPreview] = useState(false);
+    const [generatedReports, setGeneratedReports] = useState<Array<{ name: string; type: string; createdAt: string; href: string }>>([]);
+    const [datasets, setDatasets] = useState({ patients: true, clinicians: true, appointments: true, billing: true, users: false });
+    const clinicians = data.practitioners;
+    const selectedAppointments = data.appointments.filter(a => {
+        const overdue = a.status === "confirmed" && new Date(a.starts_at) <= new Date();
+        const statusMatch = reportAppointmentStatus === "all" || a.status === reportAppointmentStatus || (reportAppointmentStatus === "overdue" && overdue) || (reportAppointmentStatus === "upcoming" && a.status === "confirmed" && !overdue);
+        return (!selectedClinician || a.practitioner_id === selectedClinician) && (!selectedPatient || a.patient_id === selectedPatient) && (!reportStart || a.starts_at.slice(0, 10) >= reportStart) && (!reportEnd || a.starts_at.slice(0, 10) <= reportEnd) && statusMatch;
+    });
+    const selectedInvoices = data.invoices.filter(i => (!selectedPatient || i.patient_id === selectedPatient) && (!reportPaymentStatus || reportPaymentStatus === "all" || i.status === reportPaymentStatus) && (!reportStart || i.created_at.slice(0, 10) >= reportStart) && (!reportEnd || i.created_at.slice(0, 10) <= reportEnd));
+    const counts = { patients: selectedPatient ? 1 : data.patients.filter(p => !selectedClinician || p.clinicianIds?.includes(selectedClinician)).length, clinicians: selectedClinician ? 1 : clinicians.length, appointments: selectedAppointments.length, billing: selectedInvoices.length, users: data.users.length };
+    const total = Object.entries(datasets).reduce((sum, [key, checked]) => sum + (checked ? counts[key as keyof typeof counts] : 0), 0);
+    const reset = () => { setScope("clinic"); setSelectedClinician(""); setSelectedPatient(""); setClinicianQuery(""); setPatientQuery(""); setReportStart(""); setReportEnd(""); setReportAppointmentStatus("all"); setReportPaymentStatus("all"); setPreview(false); setDatasets({ patients: true, clinicians: true, appointments: true, billing: true, users: false }); };
+    const matchingClinicians = clinicians.filter(c => `${c.name} ${c.email} ${c.phone}`.toLowerCase().includes(clinicianQuery.toLowerCase())).slice(0, 8);
+    const matchingPatients = data.patients.filter(p => `${p.name} ${p.email} ${p.phone} ${p.id}`.toLowerCase().includes(patientQuery.toLowerCase())).slice(0, 8);
+    const customParams = new URLSearchParams({ report: "custom", datasets: Object.entries(datasets).filter(([, checked]) => checked).map(([key]) => key).join(",") });
+    if (selectedClinician) customParams.set("clinicianId", selectedClinician);
+    if (selectedPatient) customParams.set("patientId", selectedPatient);
+    if (reportStart) customParams.set("start", reportStart);
+    if (reportEnd) customParams.set("end", reportEnd);
+    if (reportAppointmentStatus !== "all") customParams.set("appointmentStatus", reportAppointmentStatus);
+    if (reportPaymentStatus !== "all") customParams.set("paymentStatus", reportPaymentStatus);
+    const customExportUrl = "/api/export?" + customParams.toString();
+    const persistedReports = data.audits.filter(a => a.action === "data.exported").map(a => {
+        const type = a.entity === "all" ? "Operational Export" : a.entity === "custom" ? "Custom Report" : `${a.entity[0].toUpperCase()}${a.entity.slice(1)} Report`;
+        return { name: type, type: "Excel", createdAt: a.created_at, href: `/api/export?report=${a.entity === "all" ? "all" : a.entity === "custom" ? "custom" : a.entity}` };
+    });
+    const recentExports = [...generatedReports, ...persistedReports].slice(0, 8);
+    const trackExport = (name: string, type: string, href: string) => setGeneratedReports(current => [{ name, type, createdAt: new Date().toISOString(), href }, ...current].slice(0, 8));
+    const reportCards = [
+        ["Patient Report", "Patient details, appointments and billing history.", "mint", "patients"],
+        ["Clinician Report", "Clinician profile, appointments and associated operational records.", "blue", "clinicians"],
+        ["Appointments Report", "All appointment records with patient and clinician details.", "peach", "appointments"],
+        ["Billing Report", "Invoices, payments and outstanding amounts.", "lavender", "billing"],
+    ] as const;
+    return <section className="admin-reports-screen">
+      <div className="admin-reports-header"><div><span className="eyebrow">MINDSPINE / ADMINISTRATOR</span><h2>Reports</h2><p>Build and export clinic operational data.</p></div><div className="admin-export-all"><a className="button primary" href="/api/export?report=all" onClick={() => trackExport("Operational Export", "Excel", "/api/export?report=all")}><Download size={16}/>Export All Operational Data</a><small>Download a complete workbook of all admin-authorised clinic records.</small></div></div>
+      <section className="admin-report-section quick-reports"><SectionHead title="Quick Reports" description="Generate commonly used reports with one click."/><div className="admin-report-cards">{reportCards.map(([title, description, tone, dataset]) => { const reportType = dataset === "patients" ? "patient" : dataset === "clinicians" ? "clinician" : dataset; const href = `/api/export?report=${reportType}`; return <article className={`admin-report-card ${tone}`} key={title}><span className="admin-report-icon"><FileText size={20}/></span><div><h3>{title}</h3><p>{description}</p></div><a className="button secondary" href={href} onClick={() => trackExport(title, "Excel", href)}><Download size={14}/>Generate Report</a></article>; })}</div></section>
+      <section className="admin-report-section admin-custom-report"><div className="admin-custom-main"><SectionHead title="Create a Custom Report" description="Choose the data you need, set filters and preview before exporting."/><div className="admin-report-form"><label>Report scope<select value={scope} onChange={e => { setScope(e.target.value); setSelectedClinician(""); setSelectedPatient(""); }}><option value="clinic">Clinic-wide</option><option value="clinician">By Clinician</option><option value="patient">By Patient</option></select></label><fieldset><legend>Data to include</legend>{([ ["patients", "Patients"], ["appointments", "Appointments"], ["clinicians", "Clinicians"], ["billing", "Billing & Payments"]] as const).map(([key, label]) => <label className="admin-check" key={key}><input type="checkbox" checked={datasets[key]} onChange={e => setDatasets(prev => ({ ...prev, [key]: e.target.checked }))}/>{label}</label>)}</fieldset>{scope === "clinician" && <label>Clinician<input list="admin-clinicians" value={clinicianQuery} placeholder="Search by name, email or phone" onChange={e => { const value = e.target.value; setClinicianQuery(value); const match = matchingClinicians.find(c => `${c.name} · ${c.email}` === value || c.name === value); setSelectedClinician(match?.id || ""); }}/><datalist id="admin-clinicians">{matchingClinicians.map(c => <option key={c.id} value={`${c.name} · ${c.email}`}>{c.phone}</option>)}</datalist></label>}{scope === "patient" && <label>Patient<input list="admin-patients" value={patientQuery} placeholder="Search by name, email, phone or ID" onChange={e => { const value = e.target.value; setPatientQuery(value); const match = matchingPatients.find(p => `${p.name} · ${p.email}` === value || p.name === value); setSelectedPatient(match?.id || ""); }}/><datalist id="admin-patients">{matchingPatients.map(p => <option key={p.id} value={`${p.name} · ${p.email}`}>{p.phone} · {p.id}</option>)}</datalist></label>}<label>Start date<input type="date" value={reportStart} onChange={e => setReportStart(e.target.value)}/></label><label>End date<input type="date" value={reportEnd} onChange={e => setReportEnd(e.target.value)}/></label><label>Appointment status<select value={reportAppointmentStatus} onChange={e => setReportAppointmentStatus(e.target.value)}><option value="all">All statuses</option><option value="upcoming">Upcoming</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="overdue">Overdue</option></select></label><label>Payment status<select value={reportPaymentStatus} onChange={e => setReportPaymentStatus(e.target.value)}><option value="all">All statuses</option><option value="paid">Paid</option><option value="unpaid">Unpaid</option><option value="refunded">Refunded</option></select></label></div><div className="admin-report-actions"><button className="button secondary" type="button" onClick={reset}>Reset Filters</button><button className="button primary" type="button" onClick={() => setPreview(true)}><Search size={15}/>Preview Report</button></div></div><aside className="admin-report-preview"><div className="admin-preview-title"><BarChart3 size={22}/><div><h3>Preview your report</h3><p>See how many records match your criteria before exporting.</p></div></div>{preview ? <><strong className="admin-preview-total">{total.toLocaleString()} records across {Object.values(datasets).filter(Boolean).length} datasets</strong>{Object.entries(datasets).filter(([, checked]) => checked).map(([key]) => <div className="admin-preview-row" key={key}><span>{key === "billing" ? "Invoices" : key[0].toUpperCase() + key.slice(1)}</span><strong>{counts[key as keyof typeof counts].toLocaleString()}</strong></div>)}<a className="button primary" href={customExportUrl}><Download size={15}/>Export Excel</a></> : <div className="admin-preview-empty"><FileText size={34}/><p>Select your filters and click “Preview Report” to see a summary.</p></div>}</aside></section>
+      <section className="admin-report-section admin-recent-exports"><SectionHead title="Recent Exports" description="Your recently generated reports."/>{recentExports.length ? <div className="admin-recent-export-list">{recentExports.map((item, index) => <a className="admin-recent-export" href={item.href} key={`${item.createdAt}-${index}`}><FileText size={20}/><span><strong>{item.name}</strong><small>{item.type} · {date(item.createdAt, { day: "2-digit", month: "short", year: "numeric" })}</small></span><Download size={16}/></a>)}</div> : <div className="admin-empty-export"><Clock3 size={22}/><strong>No exports yet</strong><span>Your generated reports will appear here.</span></div>}</section>
+    </section>;
+}
 type Dialog = {
     kind: "book";
     appointment?: Appointment;
@@ -23,6 +75,9 @@ type Dialog = {
 } | {
     kind: "patient";
     patient: User;
+} | {
+    kind: "staffUser";
+    user: User;
 } | {
     kind: "clinicalRecord";
     note: ClinicalNote;
@@ -35,6 +90,9 @@ type Dialog = {
 } | {
     kind: "editPatient";
     patient: User;
+} | {
+    kind: "editStaffUser";
+    user: User;
 } | {
     kind: "invoice";
     id: string;
@@ -105,23 +163,28 @@ const navItems: {
         roles: ["patient", "practitioner", "admin"],
     },
     { id: "physio", label: "Physiotherapy Journey", icon: HeartPulse, roles: ["patient", "practitioner"] },
-    { id: "team", label: "Team & access", icon: ShieldCheck, roles: ["admin"] },
+    { id: "team", label: "Team & Access", icon: ShieldCheck, roles: ["admin"] },
 ];
 export default function Workspace({ data }: {
     data: AppData;
 }) {
-    const [tab, setTab] = useState<Tab>("overview"), [search, setSearch] = useState(""), [filter, setFilter] = useState("all"), [dialog, setDialog] = useState<Dialog>(null), [toast, setToast] = useState<{
+    const [tab, setTab] = useState<Tab>("overview"), [search, setSearch] = useState(""), [filter, setFilter] = useState("all"), [teamRole, setTeamRole] = useState("all"), [teamPage, setTeamPage] = useState(1), [teamMenuId, setTeamMenuId] = useState<string | null>(null), [teamMenuPos, setTeamMenuPos] = useState<{ top: number; left: number } | null>(null), [dialog, setDialog] = useState<Dialog>(null), [toast, setToast] = useState<{
         ok: boolean;
         message: string;
     } | null>(null), [mobile, setMobile] = useState(false), [pending, start] = useTransition();
     const [chosenPractitioner, setChosenPractitioner] = useState(""), [chosenDay, setChosenDay] = useState("");
     const [bookReturnPatient, setBookReturnPatient] = useState<User | undefined>(undefined);
     const [billingStatusFilter, setBillingStatusFilter] = useState("all"), [billingServiceFilter, setBillingServiceFilter] = useState("all");
+    const [billingClinicianFilter, setBillingClinicianFilter] = useState("");
+    const [billingClinicianQuery, setBillingClinicianQuery] = useState("");
+    const [billingClinicianOpen, setBillingClinicianOpen] = useState(false);
     const [notificationCategory, setNotificationCategory] = useState("all"), [notificationTimeFilter, setNotificationTimeFilter] = useState("all");
     const [patientQuery, setPatientQuery] = useState(""), [selectedPatientId, setSelectedPatientId] = useState(""), [selectedSlotId, setSelectedSlotId] = useState("");
+    const [clinicianQuery, setClinicianQuery] = useState("");
     const [calendarMonthOffset, setCalendarMonthOffset] = useState(0);
     const [confirmLogout, setConfirmLogout] = useState(false);
     const [deletePatientTarget, setDeletePatientTarget] = useState<{ id: string; name: string } | null>(null);
+    const [deleteStaffTarget, setDeleteStaffTarget] = useState<{ id: string; name: string } | null>(null);
     const [deleteSlotTarget, setDeleteSlotTarget] = useState<{ id: string; label: string } | null>(null);
     const [slotsShown, setSlotsShown] = useState(10);
     const [openPatientMenu, setOpenPatientMenu] = useState<string | null>(null);
@@ -129,6 +192,9 @@ export default function Workspace({ data }: {
     const [openApptMenu, setOpenApptMenu] = useState<string | null>(null);
     const [apptMenuPos, setApptMenuPos] = useState<{ top: number; left: number } | null>(null);
     const [deleteApptTarget, setDeleteApptTarget] = useState<{ id: string; label: string } | null>(null);
+    const [mobileTeamFilterOpen, setMobileTeamFilterOpen] = useState(false);
+    const [mobileActionsFor, setMobileActionsFor] = useState<User | null>(null);
+    const [confirmToggleTarget, setConfirmToggleTarget] = useState<User | null>(null);
     const [editApptTarget, setEditApptTarget] = useState<Appointment | null>(null);
     const [signingOut, startSignOut] = useTransition();
     const [clinicalDetailTab, setClinicalDetailTab] = useState<"overview" | "patientDetails" | "history" | "examination" | "observation" | "palpation" | "mmt" | "clinicalSummary" | "progress" | "documents">("overview");
@@ -137,15 +203,45 @@ export default function Workspace({ data }: {
     const [docsTypeFilter, setDocsTypeFilter] = useState("all");
     const [docsSort, setDocsSort] = useState<"newest" | "oldest" | "name" | "size">("newest");
     const [passwordVisible, setPasswordVisible] = useState({ current: false, next: false, confirm: false });
+    const [createWorkspace, setCreateWorkspace] = useState("physiotherapist");
     const todayIST = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
     const [scheduleDate, setScheduleDate] = useState(todayIST);
     const [careRecordsClinicianFilter, setCareRecordsClinicianFilter] = useState("all");
+    const [careStatus, setCareStatus] = useState("all");
+    const [careStart, setCareStart] = useState("");
+    const [careEnd, setCareEnd] = useState("");
+    const [careSort, setCareSort] = useState("recent");
     const nowISTHour = Number(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", hour: "2-digit", hour12: false }));
     const availableHours = Array.from({ length: 10 }, (_, i) => i + 9).filter((h) => scheduleDate !== todayIST || h > nowISTHour);
     const [avatarPending, setAvatarPending] = useState(false);
     const [avatarError, setAvatarError] = useState("");
+    const [logoPending, setLogoPending] = useState(false);
+    const [logoError, setLogoError] = useState("");
+    const MAX_IMAGE_MB = 2;
+    const [imageWarnings, setImageWarnings] = useState<Record<string, string>>({});
+    function oversizeMessage(file: File, maxMB: number) {
+        return `That image is ${(file.size / (1024 * 1024)).toFixed(1)} MB. Choose one under ${maxMB} MB.`;
+    }
+    // Shared by the Add Patient / Add Clinician forms, which embed the image as a base64 data URL
+    // in a hidden field and submit it through a server action — unlike Settings' avatar/logo
+    // uploads (which POST the raw file to /api/avatar), so the size must be caught client-side
+    // before it ever reaches the server action's request-body limit.
+    function readImageFile(key: string, maxMB: number, file: File | undefined, hidden: HTMLInputElement | null, picker?: HTMLInputElement) {
+        if (!file) return;
+        if (file.size > maxMB * 1024 * 1024) {
+            setImageWarnings((w) => ({ ...w, [key]: oversizeMessage(file, maxMB) }));
+            if (hidden) hidden.value = "";
+            if (picker) picker.value = ""; // Don't leave a rejected filename showing as if it were staged.
+            return;
+        }
+        setImageWarnings((w) => (key in w ? (() => { const n = { ...w }; delete n[key]; return n; })() : w));
+        const reader = new FileReader();
+        reader.onload = () => { if (hidden) hidden.value = String(reader.result || ""); };
+        reader.readAsDataURL(file);
+    }
     async function uploadAvatar(file: File) {
         setAvatarError("");
+        if (file.size > MAX_IMAGE_MB * 1024 * 1024) { setAvatarError(oversizeMessage(file, MAX_IMAGE_MB)); return; }
         setAvatarPending(true);
         try {
             const form = new FormData();
@@ -172,6 +268,20 @@ export default function Workspace({ data }: {
         } finally {
             setAvatarPending(false);
         }
+    }
+    async function uploadLogo(file: File) {
+        setLogoError("");
+        if (file.size > MAX_IMAGE_MB * 1024 * 1024) { setLogoError(oversizeMessage(file, MAX_IMAGE_MB)); return; }
+        setLogoPending(true);
+        try { const form = new FormData(); form.set("file", file); form.set("kind", "logo"); const result = await fetch("/api/avatar", { method: "POST", body: form }); const body = await result.json(); if (!result.ok) { setLogoError(body.error || "Unable to upload the logo."); return; } router.refresh(); }
+        catch { setLogoError("Unable to upload the logo. Check your connection and try again."); }
+        finally { setLogoPending(false); }
+    }
+    async function removeLogo() {
+        setLogoError(""); setLogoPending(true);
+        try { const result = await fetch("/api/avatar?kind=logo", { method: "DELETE" }); if (!result.ok) { setLogoError("Unable to remove the logo."); return; } router.refresh(); }
+        catch { setLogoError("Unable to remove the logo. Check your connection and try again."); }
+        finally { setLogoPending(false); }
     }
     const [docsPage, setDocsPage] = useState(1);
     const [showUploadPanel, setShowUploadPanel] = useState(false);
@@ -202,6 +312,7 @@ export default function Workspace({ data }: {
     const isOverdue = (appointment: Appointment) => appointment.status === "confirmed" && new Date(appointment.starts_at) <= now;
     const appointmentStatusLabel = (appointment: Appointment) => isOverdue(appointment) ? "Overdue" : appointment.status === "confirmed" ? "Upcoming" : appointment.status;
     const patientCode = (patient: User) => "#P-" + (patient.id.replace(/\D/g, "").slice(-3).padStart(3, "0") || patient.id.toUpperCase().slice(0, 3));
+    const invoiceClinician = (invoice: Invoice) => { const appt = data.appointments.find((a) => a.id === invoice.appointment_id); return appt ? data.practitioners.find((pr) => pr.id === appt.practitioner_id) : undefined; };
     const appts = data.appointments.filter((a) => matches(`${a.patient} ${a.practitioner} ${a.service} ${a.status} ${appointmentStatusLabel(a)} ${(() => { const p = data.patients.find((p) => p.id === a.patient_id); return p ? `${p.email} ${patientCode(p)}` : ""; })()} ${date(a.starts_at, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}`) &&
         (filter === "all" ||
             (filter === "upcoming"
@@ -209,6 +320,11 @@ export default function Workspace({ data }: {
                 : filter === "overdue"
                     ? isOverdue(a)
                     : a.status === filter)));
+    const teamUsers = data.users.filter((person) => {
+        if (person.role === "patient" && !person.active) return false;
+        const role = person.role === "practitioner" ? clinicianLabel(person.specialty) : person.role === "admin" ? "Administrator" : "Patient";
+        return (teamRole === "all" || role === teamRole) && matches(`${person.name} ${person.email} ${role}`);
+    });
     function navigate(next: Tab) {
         setTab(next);
         setSearch("");
@@ -217,7 +333,10 @@ export default function Workspace({ data }: {
     }
     function openBook(appointment?: Appointment, patient?: User) {
         setChosenDay("");
-        setChosenPractitioner(appointment?.practitioner_id || (isDoctor ? u.id : ""));
+        const presetPractitionerId = appointment?.practitioner_id || (isDoctor ? u.id : "");
+        setChosenPractitioner(presetPractitionerId);
+        const presetPractitioner = data.practitioners.find((p) => p.id === presetPractitionerId);
+        setClinicianQuery(presetPractitioner ? `${presetPractitioner.name}${presetPractitioner.role === "practitioner" ? ` · ${clinicianLabel(presetPractitioner.specialty)}` : ""}` : "");
         setChosenDay("");
         setSelectedSlotId("");
         setPatientQuery(patient?.name || "");
@@ -271,7 +390,12 @@ export default function Workspace({ data }: {
         (!chosenDay || s.starts_at.startsWith(chosenDay)));
     const selectedSlotStillValid = validSlots.some((slot) => slot.id === selectedSlotId);
     const availableDaySet = new Set(days);
-    const patientMatches = data.patients.filter((patient) => `${patient.name} ${patient.email} ${patient.phone} ${patientCode(patient)}`.toLowerCase().includes(patientQuery.trim().toLowerCase())).slice(0, 5);
+    const patientMatches = data.patients
+        // A patient with no recorded clinician yet (newly added, never booked) stays bookable with
+        // any clinician for their first visit; once affiliated, they're scoped to their own clinician(s).
+        .filter((patient) => !chosenPractitioner || !(patient.clinicianIds ?? []).length || (patient.clinicianIds ?? []).includes(chosenPractitioner))
+        .filter((patient) => `${patient.name} ${patient.email} ${patient.phone} ${patientCode(patient)}`.toLowerCase().includes(patientQuery.trim().toLowerCase()))
+        .slice(0, 5);
     const selectedPatient = data.patients.find((patient) => patient.id === selectedPatientId);
     const filteredNotes = data.notes.filter((n) => matches(n.patient + " " + n.practitioner + " " + n.diagnosis + " " + n.notes + " " + n.plan));
     const filteredFiles = data.files.filter((f) => { const patient = data.patients.find((p) => p.id === f.patient_id); return matches(f.name + " " + (patient?.name || "") + " " + f.mime); });
@@ -308,8 +432,8 @@ export default function Workspace({ data }: {
         const textMatch = (record.patient + " " + record.patientCode + " " + record.title + " " + record.summary + " " + record.recordType + " " + record.clinician).toLowerCase().includes(search.toLowerCase());
         const typeMatch = recordFilter === "all" || (recordFilter === "clinical" && record.recordType === "Clinical Note") || (recordFilter === "progress" && record.recordType === "Progress Sheet") || (recordFilter === "documents" && record.recordType === "Document") || (recordFilter === "draft" && record.status === "Draft") || (recordFilter === "published" && record.status === "Published");
         const clinicianMatch = careRecordsClinicianFilter === "all" || record.clinician === careRecordsClinicianFilter;
-        return textMatch && typeMatch && clinicianMatch;
-    }).sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+        return textMatch && typeMatch && clinicianMatch && (careStatus === "all" || record.status === careStatus) && (!careStart || record.createdAt.slice(0, 10) >= careStart) && (!careEnd || record.createdAt.slice(0, 10) <= careEnd);
+    }).sort((a, b) => careSort === "patient" ? a.patient.localeCompare(b.patient) : (careSort === "oldest" ? 1 : -1) * (+new Date(a.createdAt) - +new Date(b.createdAt)));
     const allCareRecords = data.notes.length + data.files.length;
     const careCounts = { draft: data.notes.filter((n) => !n.published).length, published: data.notes.filter((n) => n.published).length, clinical: data.notes.filter((n) => n.assessment_json).length, progress: data.notes.filter((n) => !n.assessment_json).length, documents: data.files.length };
     const recordFilter = ["clinical", "progress", "documents", "draft", "published"].includes(filter) ? filter : "all";
@@ -354,7 +478,7 @@ export default function Workspace({ data }: {
               <th>Date & Time</th>
               <th>{isPatient ? "Clinician" : "Patient"}</th>
               <th>Appointment Type</th>
-              <th>Clinician</th>
+              {!isPatient && <th>Clinician</th>}
               <th>Status</th>
               <th>Actions</th>
             </tr>
@@ -366,7 +490,7 @@ export default function Workspace({ data }: {
                 <td><strong>{date(a.starts_at, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</strong><small>{time(a.starts_at)} - {time(appointmentEnd(a))}</small></td>
                 <td><div className="person table-person"><Avatar name={isPatient ? a.practitioner : a.patient}/><div><strong>{isPatient ? a.practitioner : a.patient}</strong><small>{isPatient ? clinicianLabel(data.practitioners.find(p => p.id === a.practitioner_id)?.specialty) : (patient?.email || "No email recorded") + " · " + (patient ? patientCode(patient) : a.id.toUpperCase().slice(0, 8))}</small></div></div></td>
                 <td><span className="service-cell"><ClipboardList size={18}/><span><strong>{a.service}</strong><small>{money(a.amount)} · 60 min</small></span></span></td>
-                <td><div className="person clinician-cell"><Avatar name={a.practitioner}/><div><strong>{a.practitioner}</strong><small>{clinicianLabel(data.practitioners.find(p => p.id === a.practitioner_id)?.specialty)}</small></div></div></td>
+                {!isPatient && <td><div className="person clinician-cell"><Avatar name={a.practitioner}/><div><strong>{a.practitioner}</strong><small>{clinicianLabel(data.practitioners.find(p => p.id === a.practitioner_id)?.specialty)}</small></div></div></td>}
                 <td><Badge tone={isOverdue(a) ? "overdue" : a.status}>{appointmentStatusLabel(a)}</Badge></td>
                 <td><div className="row-actions detail-actions"><button className="view-row-button" type="button" onClick={() => setDialog({ kind: "appointment", appointment: a })}><FileText size={16}/>View</button>{a.status !== "completed" && <div className="appt-row-menu"><button className="kebab-button" type="button" aria-haspopup="menu" aria-expanded={openApptMenu === a.id} aria-label={"More actions for appointment with " + a.patient} onClick={(e) => { if (openApptMenu === a.id) { setOpenApptMenu(null); return; } const rect = e.currentTarget.getBoundingClientRect(); setApptMenuPos({ top: rect.bottom + 6, left: rect.right - 200 }); setOpenApptMenu(a.id); }}>⋮</button>{openApptMenu === a.id && apptMenuPos && <><div className="row-menu-backdrop" onClick={() => setOpenApptMenu(null)}/><div className="row-menu-dropdown" role="menu" style={{ top: apptMenuPos.top, left: apptMenuPos.left }}>
                   <button type="button" role="menuitem" onClick={() => { setOpenApptMenu(null); openBook(a); }}><CalendarDays size={15}/>Reschedule</button>
@@ -387,7 +511,7 @@ export default function Workspace({ data }: {
             const next = patientNextAppointment(p.id);
             const completedCount = patientCompletedVisits(p.id);
             return <article className="compact-row patient-compact-card" key={p.id}>
-              <Avatar name={p.name}/>
+              <Avatar name={p.name} avatar={p.avatar}/>
               <div className="compact-main"><strong>{p.name}</strong><small>{patientCode(p)}</small><small>{p.email}</small><small>{p.phone || "No phone number recorded"}</small></div>
               <div className="compact-meta"><strong><FileText size={13}/>{completedCount} completed {completedCount === 1 ? "visit" : "visits"}</strong><small>{next ? "Next visit scheduled" : "No upcoming visit"}</small></div>
               <div className="compact-meta"><strong>{next ? date(next.starts_at, { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "-"}</strong><small>{next ? time(next.starts_at) : "No upcoming visit"}</small></div>
@@ -415,7 +539,7 @@ export default function Workspace({ data }: {
     function renderCareRecordsTable() {
         if (!careRecords.length) {
             const filtered = allCareRecords > 0;
-            return <div className="care-record-empty"><Empty icon={filtered ? Search : FileText} title={filtered ? "No Records Match Your Filters" : "No Clinical Notes Yet"} description={filtered ? "We couldn’t find any records matching your current search or filter criteria." : isDoctor ? "Start documenting your patient’s care journey. Add clinical notes to capture assessments, observations and important updates." : "Your released care reports will appear here."} action={filtered ? <button className="button secondary" type="button" onClick={() => { setSearch(""); setFilter("all"); setCareRecordsClinicianFilter("all"); }}>Clear Filters</button> : isDoctor ? <button className="button primary" type="button" onClick={() => setDialog({ kind: "note" })}><Plus size={17}/>Add Clinical Note</button> : undefined}/></div>;
+            return <div className="care-record-empty"><Empty icon={filtered ? Search : FileText} title={filtered ? "No Records Match Your Filters" : "No Clinical Notes Yet"} description={filtered ? "We couldn’t find any records matching your current search or filter criteria." : isDoctor ? "Start documenting your patient’s care journey. Add clinical notes to capture assessments, observations and important updates." : "Your released care reports will appear here."} action={filtered ? <button className="button secondary" type="button" onClick={() => { setSearch(""); setFilter("all"); setCareRecordsClinicianFilter("all"); setCareStart(""); setCareEnd(""); setCareStatus("all"); setCareSort("recent"); }}>Clear Filters</button> : isDoctor ? <button className="button primary" type="button" onClick={() => setDialog({ kind: "note" })}><Plus size={17}/>Add Clinical Note</button> : undefined}/></div>;
         }
         return (<div className="care-records-table-wrap desktop-care-records"><table className="data-table care-records-table"><thead><tr><th scope="col">Date</th><th scope="col">Patient</th><th scope="col">Record Type</th><th scope="col">Title / Summary</th><th scope="col">Clinician</th><th scope="col">Linked Visit</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead><tbody>{careRecords.map((record) => <tr key={record.id}><td><strong>{date(record.createdAt)}</strong><small>{time(record.createdAt)}</small></td><td><div className="person table-person"><Avatar name={record.patient}/><div><strong>{record.patient}</strong><small>{record.patientCode}</small></div></div></td><td><Badge tone={recordTypeTone(record)}>{record.recordType}</Badge></td><td><strong>{record.title}</strong><small>{record.summary}</small></td><td><strong>{record.clinician}</strong>{record.specialty && <small>{record.specialty}</small>}</td><td><small>{record.linkedVisit}</small></td><td><Badge tone={statusTone(record)}>{record.status}</Badge></td><td><div className="row-actions detail-actions">{renderRecordAction(record)}</div></td></tr>)}</tbody></table></div>);
     }
@@ -444,23 +568,13 @@ export default function Workspace({ data }: {
         <nav aria-label="Main navigation">
           {navItems
             .filter((n) => n.roles.includes(u.role) && (n.id !== "physio" || isPatient || u.specialty === "physiotherapist") && (n.id !== "billing" || !isDoctor || u.specialty === "physiotherapist"))
-            .map((n) => (<button key={n.id} className={tab === n.id ? "active" : ""} onClick={() => navigate(n.id)}>
+            .map((n) => (<button key={n.id} aria-current={tab === n.id ? "page" : undefined} className={tab === n.id ? "active" : ""} onClick={() => navigate(n.id)}>
                 <n.icon size={19}/>
                 {n.label}
               </button>))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="care-note">
-            <HeartPulse size={23}/>
-            <strong>Care that moves you forward.</strong>
-            <p>
-              Small steps today.
-              <br />A healthier tomorrow.
-            </p>
-            <span>
-              THE MINDSPINE WAY <ArrowUpRight size={13}/>
-            </span>
-          </div>
+          <span className="nav-label account-label">ACCOUNT</span>
           <nav aria-label="Account navigation">
             <button className={tab === "notifications" ? "active" : ""} onClick={() => navigate("notifications")}>
               <Bell size={19}/>
@@ -501,10 +615,10 @@ export default function Workspace({ data }: {
             year: "numeric",
         })}
             </span>
-            <button className="notification-button" onClick={() => navigate("notifications")} aria-label={`Notifications, ${unread} unread`}>
+            {!isAdmin && <button className="notification-button" onClick={() => navigate("notifications")} aria-label={`Notifications, ${unread} unread`}>
               <Bell size={20}/>
               {unread > 0 && <i />}
-            </button>
+            </button>}
             <Avatar name={u.name} size="small" avatar={u.avatar}/>
             <button className="workspace-logout" disabled={signingOut} onClick={() => setConfirmLogout(true)}>
               <LogOut size={16} aria-hidden="true" />
@@ -512,12 +626,12 @@ export default function Workspace({ data }: {
             </button>
           </div>
         </header>
-        <main className={"main-content " + (tab === "overview" ? "overview-content" : tab === "records" ? "care-records-content" : "")}>
+        <main className={"main-content " + (isAdmin ? "admin-workspace " : "") + (tab === "overview" ? "overview-content" : tab === "records" ? "care-records-content" : "")}>
           {tab !== "records" && <div className="page-heading">
             <div>
               <div className="eyebrow">
                 {tab === "overview"
-            ? "A NEW DAY. A LITTLE MORE PROGRESS."
+            ? isAdmin ? "A HEALTHIER TOMORROW, TOGETHER." : "A NEW DAY. A LITTLE MORE PROGRESS."
             : "MINDSPINE / " + roleLabel.toUpperCase()}
               </div>
               <h1>
@@ -539,7 +653,7 @@ export default function Workspace({ data }: {
                             : tab === "reports"
                                 ? "Your care and clinic insights, ready when you need them."
                                 : tab === "team"
-                                    ? "The right people, with the right access."
+                                    ? "Manage your clinic team, roles and access permissions."
                                     : tab === "notifications"
                                         ? "Your appointments, reports, and clinic updates."
                                         : tab === "physio"
@@ -548,15 +662,13 @@ export default function Workspace({ data }: {
               </p>
             </div>
             <div className="heading-actions">
-              {!isPatient && (tab === "overview" || tab === "patients") && <button className="button primary" onClick={() => setDialog({kind:"user",role:"patient"})}><Plus size={17}/>Add Patient</button>}
-              {isAdmin && tab === "team" ? (<button className="button primary" onClick={() => setDialog({ kind: "user" })}>
-                  <Plus size={17}/>
-                  Add User
-                </button>) : tab === "patients" ? (isDoctor && (<a className="button secondary" href="/api/export">
+              {isAdmin && tab === "overview" && <button className="button primary" onClick={() => setDialog({kind:"user",role:"patient"})}><Plus size={17}/>Register Patient</button>}{!isAdmin && !isPatient && (tab === "patients" || tab === "overview") && <button className="button primary" onClick={() => setDialog({kind:"user",role:"patient"})}><Plus size={17}/>Add Patient</button>}
+              {tab === "patients" ? (isDoctor && (<a className="button secondary" href="/api/export">
                     <Download size={17}/>
                     Export Excel
                   </a>)) : (["overview", "appointments"].includes(tab) && (<>
-                    <button className="button secondary" onClick={() => isPatient
+                    {isAdmin && tab === "overview" && <><button className="button secondary" onClick={() => setDialog({ kind: "user" })}><Plus size={16}/>Create User Account</button><button className="button primary" onClick={() => openBook()}><Plus size={16}/>New Appointment</button></>}
+                    {!isAdmin && <><button className="button secondary" onClick={() => isPatient
                 ? navigate("records")
                 : (setSlotsShown(10), setDialog({ kind: "schedule" }))}>
                       <CalendarDays size={16}/>
@@ -565,7 +677,7 @@ export default function Workspace({ data }: {
                     <button className="button primary" onClick={() => openBook()}>
                       <Plus size={18}/>
                       {isPatient ? "Book a Visit" : "New Appointment"}
-                    </button>
+                    </button></>}
                   </>))}
             </div>
           </div>}
@@ -579,10 +691,6 @@ export default function Workspace({ data }: {
               </button>
             </div>)}
           {tab === "overview" && (<>
-              {isAdmin && <section className="people-shortcuts" aria-label="Manage doctors and patients">
-                <div className="panel people-shortcut"><span className="icon-tile"><Users size={23}/></span><div><h2>Patients</h2><p>{data.patients.length} registered · Keep your patient directory up to date.</p><button className="text-button" onClick={() => navigate("patients")}>View Patients <ArrowRight size={14}/></button></div><button className="button primary" onClick={() => setDialog({kind:"user",role:"patient"})}><Plus size={16}/>Register Patient</button></div>
-                <div className="panel people-shortcut"><span className="icon-tile"><HeartPulse size={23}/></span><div><h2>Clinical team</h2><p>{data.users.filter(person => person.role === "practitioner").length} registered · Grow your clinic’s care team.</p><button className="text-button" onClick={() => navigate("team")}>View Team <ArrowRight size={14}/></button></div><button className="button primary" onClick={() => setDialog({kind:"user",role:"practitioner"})}><Plus size={16}/>Add Clinician</button></div>
-              </section>}
               <div className="stats-grid">
                 {[
                 {
@@ -601,7 +709,7 @@ export default function Workspace({ data }: {
                 {
                     label: isPatient
                         ? "Completed Visits"
-                        : "Patients in Your Care",
+                        : "Total Patients",
                     value: isPatient ? completed.length : data.patients.length,
                     sub: isPatient
                         ? "Every visit is progress"
@@ -611,28 +719,28 @@ export default function Workspace({ data }: {
                 },
                 {
                     label: isAdmin
-                        ? "Payments Received"
+                        ? "Active Clinical Team"
                         : isPatient
                             ? "Care Reports"
                             : "Clinical Records",
-                    value: isAdmin ? money(collected) : isPatient ? data.notes.length : allCareRecords,
+                    value: isAdmin ? data.users.filter(person => person.role === "practitioner" && person.active).length : isPatient ? data.notes.length : allCareRecords,
                     sub: isAdmin
-                        ? "Recorded payments · all time"
+                        ? "Active physiotherapists and psychologists"
                         : isPatient
                             ? "Your care, clearly documented"
                             : `${data.notes.filter((n) => n.published).length} of ${data.notes.length} notes released to patients`,
-                    icon: isAdmin ? CreditCard : ClipboardList,
+                    icon: isAdmin ? HeartPulse : ClipboardList,
                     color: "peach",
                 },
                 {
-                    label: isDoctor
+                    label: isDoctor || isAdmin
                         ? "Upcoming Appointments"
                         : "Outstanding Balance",
-                    value: isDoctor ? upcoming.length : money(outstanding),
-                    sub: isDoctor
+                    value: isDoctor || isAdmin ? upcoming.length : money(outstanding),
+                    sub: isDoctor || isAdmin
                         ? "Planned visits ahead"
                         : "Pay directly at the clinic",
-                    icon: isDoctor ? CalendarCheck : CreditCard,
+                    icon: isDoctor || isAdmin ? CalendarCheck : CreditCard,
                     color: "lavender",
                 },
             ].map((stat) => (<article className={"stat-card " + stat.color} key={stat.label}>
@@ -641,7 +749,7 @@ export default function Workspace({ data }: {
                         <stat.icon size={19}/>
                       </span>
                       <span>{stat.label}</span>
-                      <button type="button" className="stat-arrow" aria-label={stat.label + " details"} onClick={() => { if (stat.label.toLowerCase().includes("appointment") || stat.label.toLowerCase().includes("visit")) { navigate("appointments"); if (stat.label.toLowerCase().includes("upcoming")) setFilter("upcoming"); } else if (stat.label.includes("Patient")) { navigate("patients"); } else { navigate("records"); } }}>
+                      <button type="button" className="stat-arrow" aria-label={stat.label + " details"} onClick={() => { if (stat.label.toLowerCase().includes("outstanding") || stat.label.toLowerCase().includes("balance")) { navigate("billing"); } else if (stat.label.toLowerCase().includes("appointment") || stat.label.toLowerCase().includes("visit")) { navigate("appointments"); if (stat.label.toLowerCase().includes("upcoming")) setFilter("upcoming"); } else if (stat.label.includes("Patient")) { navigate("patients"); } else if (stat.label.toLowerCase().includes("team")) { navigate("team"); } else { navigate("records"); } }}>
                         <ArrowRight size={15}/>
                       </button>
                     </div>
@@ -810,17 +918,19 @@ export default function Workspace({ data }: {
                 },
                 {
                     label: isAdmin
-                        ? "Manage Your Team"
+                        ? "Create User Account"
                         : isDoctor
                             ? "Export Patient Data"
                             : "View Billing",
                     sub: isDoctor
                         ? "Download an Excel workbook"
                         : "Keep the details organized",
-                    icon: isDoctor ? Download : CreditCard,
-                    fn: () => isDoctor
-                        ? window.location.assign("/api/export")
-                        : navigate(isAdmin ? "team" : "billing"),
+                    icon: isAdmin ? Users : isDoctor ? Download : CreditCard,
+                    fn: () => isAdmin
+                        ? setDialog({ kind: "user" })
+                        : isDoctor
+                            ? window.location.assign("/api/export")
+                            : navigate("billing"),
                 },
             ].map((item) => (<button key={item.label} onClick={item.fn}>
                         <span className="quick-icon">
@@ -858,28 +968,51 @@ export default function Workspace({ data }: {
           {tab === "patients" && (<section className="refined-screen patients-screen">
               <div className="patients-search-row"><SearchInput value={search} onChange={setSearch} placeholder="Search patients by name, email or phone number..."/></div>
               {renderPatientCards(filteredPatients)}
-              {filteredPatients.length ? (<div className="table-scroll refined-table-scroll desktop-list"><table className="data-table patients-table"><thead><tr><th>Patient</th><th>Contact</th><th>Visit Summary</th><th>Next Appointment</th><th>Actions</th></tr></thead><tbody>{filteredPatients.map((p) => { const next = patientNextAppointment(p.id); const completedCount = patientCompletedVisits(p.id); return <tr key={p.id}><td><div className="person table-person"><Avatar name={p.name}/><div><strong>{p.name}</strong><small>{patientCode(p)}</small></div></div></td><td><strong>{p.email}</strong><small>{p.phone || "No phone number recorded"}</small></td><td><span className="service-cell"><CalendarDays size={18}/><span><strong>{completedCount} completed {completedCount === 1 ? "visit" : "visits"}</strong><small>{next ? "Next visit scheduled" : "No upcoming visit"}</small></span></span></td><td><strong>{next ? date(next.starts_at, { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "-"}</strong><small>{next ? time(next.starts_at) : "No upcoming visit"}</small></td><td><div className="row-actions detail-actions patient-row-menu"><button className="view-row-button" type="button" onClick={() => setDialog({ kind: "patient", patient: p })}><FileText size={16}/>View patient</button><button className="kebab-button" type="button" aria-haspopup="menu" aria-expanded={openPatientMenu === p.id} onClick={(e) => { if (openPatientMenu === p.id) { setOpenPatientMenu(null); return; } const rect = e.currentTarget.getBoundingClientRect(); setPatientMenuPos({ top: rect.bottom + 6, left: rect.right - 180 }); setOpenPatientMenu(p.id); }}>⋮</button>{openPatientMenu === p.id && patientMenuPos && <><div className="row-menu-backdrop" onClick={() => setOpenPatientMenu(null)}/><div className="row-menu-dropdown" role="menu" style={{ top: patientMenuPos.top, left: patientMenuPos.left }}><button type="button" role="menuitem" onClick={() => { setOpenPatientMenu(null); setDialog({ kind: "patient", patient: p }); }}><FileText size={15}/>View Patient</button><button type="button" role="menuitem" className="danger" onClick={() => { setOpenPatientMenu(null); setDeletePatientTarget({ id: p.id, name: p.name }); }}><Trash2 size={15}/>Delete Patient</button></div></>}</div></td></tr>; })}</tbody></table></div>) : null}
+              {filteredPatients.length ? (<div className="table-scroll refined-table-scroll desktop-list"><table className="data-table patients-table"><thead><tr><th>Patient</th><th>Contact</th><th>Visit Summary</th><th>Next Appointment</th><th>Actions</th></tr></thead><tbody>{filteredPatients.map((p) => { const next = patientNextAppointment(p.id); const completedCount = patientCompletedVisits(p.id); return <tr key={p.id}><td><div className="person table-person"><Avatar name={p.name} avatar={p.avatar}/><div><strong>{p.name}</strong><small>{patientCode(p)}</small></div></div></td><td><strong>{p.email}</strong><small>{p.phone || "No phone number recorded"}</small></td><td><span className="service-cell"><CalendarDays size={18}/><span><strong>{completedCount} completed {completedCount === 1 ? "visit" : "visits"}</strong><small>{next ? "Next visit scheduled" : "No upcoming visit"}</small></span></span></td><td><strong>{next ? date(next.starts_at, { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "-"}</strong><small>{next ? time(next.starts_at) : "No upcoming visit"}</small></td><td><div className="row-actions detail-actions patient-row-menu"><button className="view-row-button" type="button" onClick={() => setDialog({ kind: "patient", patient: p })}><FileText size={16}/>View patient</button><button className="kebab-button" type="button" aria-haspopup="menu" aria-expanded={openPatientMenu === p.id} onClick={(e) => { if (openPatientMenu === p.id) { setOpenPatientMenu(null); return; } const rect = e.currentTarget.getBoundingClientRect(); setPatientMenuPos({ top: rect.bottom + 6, left: rect.right - 180 }); setOpenPatientMenu(p.id); }}>⋮</button>{openPatientMenu === p.id && patientMenuPos && <><div className="row-menu-backdrop" onClick={() => setOpenPatientMenu(null)}/><div className="row-menu-dropdown" role="menu" style={{ top: patientMenuPos.top, left: patientMenuPos.left }}><button type="button" role="menuitem" onClick={() => { setOpenPatientMenu(null); setDialog({ kind: "patient", patient: p }); }}><FileText size={15}/>View Patient</button><button type="button" role="menuitem" className="danger" onClick={() => { setOpenPatientMenu(null); setDeletePatientTarget({ id: p.id, name: p.name }); }}><Trash2 size={15}/>Delete Patient</button></div></>}</div></td></tr>; })}</tbody></table></div>) : null}
             </section>)}
           {tab === "physio" && <PhysioWorkflow data={data} pending={pending} onSave={payload => { setToast(null); return new Promise<boolean>(resolve => { start(async () => { const result = await mutate("physio", payload); setToast(result); if (result.ok) router.refresh(); resolve(result.ok); }); }); }} onDeleteRecord={id=>action("deletePhysioRecord",{id},false)} onEvaluation={()=>setDialog({kind:"note"})} onHistory={patient=>setDialog({kind:"patient",patient})} onBook={()=>openBook()} onBilling={()=>navigate("billing")}/>}
           {tab === "records" && (<section className="care-records-screen redesigned-care-records">
               <div className="care-records-hero"><div><span className="screen-eyebrow">MindSpine / {roleLabel}</span><h2>Care Records</h2><p>Thoughtful documentation. Better continuity of care.</p></div><div className="screen-actions">{isDoctor && <button className="button primary" type="button" onClick={() => setDialog({ kind: "note" })}><Plus size={17}/>Add Clinical Note</button>}{isDoctor && <button className="button secondary" type="button" onClick={() => { setUploadDefaultPatientId(undefined); setShowUploadPanel(true); }}><Upload size={17}/>Upload Document</button>}</div></div>
-              <div className="tabs refined-tabs care-record-tabs">{[["all", "All Records (" + allCareRecords + ")"], ["documents", "Documents (" + careCounts.documents + ")"]].map(([value, label]) => <button key={value} type="button" className={recordFilter === value ? "selected" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>
+              <div className="tabs refined-tabs care-record-tabs">{[["all", "All Records (" + allCareRecords + ")"], ["clinical", "Clinical Notes (" + careCounts.clinical + ")"], ["progress", "Progress Sheets (" + careCounts.progress + ")"], ["documents", "Documents (" + careCounts.documents + ")"]].map(([value, label]) => <button key={value} type="button" className={recordFilter === value ? "selected" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>
               <div className="care-records-filterbar"><SearchInput value={search} onChange={setSearch} placeholder="Search patients, records, or keywords..."/><select aria-label="Record Type" value={recordFilter} onChange={(e) => setFilter(e.target.value)}><option value="all">Record Type</option><option value="clinical">Clinical Notes</option><option value="progress">Progress Sheets</option><option value="draft">Draft Notes</option><option value="published">Published Notes</option><option value="documents">Documents</option></select><select aria-label="Clinician" value={careRecordsClinicianFilter} onChange={(e) => setCareRecordsClinicianFilter(e.target.value)}><option value="all">Clinician</option>{data.practitioners.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}</select></div>
-              <div className="care-summary-grid">{[{label:"Draft Notes",value:careCounts.draft,icon:FileText,filter:"draft"},{label:"Published Notes",value:careCounts.published,icon:Check,filter:"published"},{label:"Clinical Notes",value:careCounts.clinical,icon:ClipboardList,filter:"clinical"},{label:"Patient Documents",value:careCounts.documents,icon:Paperclip,filter:"documents"}].map((card) => <button className="care-summary-card" type="button" key={card.label} onClick={() => setFilter(card.filter)}><span className="summary-icon"><card.icon size={22}/></span><span><small>{card.label}</small><strong>{card.value}</strong></span><ChevronRight size={18}/></button>)}</div>
-              <section className="panel care-records-panel"><div className="care-panel-head"><h3>Care Records</h3><small>{careRecords.length} shown</small></div>{renderCareRecordCards()}{renderCareRecordsTable()}</section>
-              <div className="care-records-bottom"><section className="panel recent-documents-card"><SectionHead title="Recent Patient Documents" action="View All" onClick={() => setDialog({ kind: "documentsLibrary" })}/>{recentDocuments.length ? <div className="recent-document-grid">{recentDocuments.map((f) => { const patient = patientById(f.patient_id); return <a className="recent-document-row" key={f.id} href={"/api/files?id=" + f.id + "&download=1"}><FileText size={20}/><span><strong>{f.name}</strong><small>{patient?.name || "Patient"} · {date(f.created_at)} · {Math.max(1, Math.round(f.size / 1024))} KB</small></span><Download size={16}/></a>; })}</div> : <Empty title="No patient documents yet" description="Uploaded reports, scans and supporting files will appear here."/>}</section><aside className="care-promo-card" aria-hidden="true"><h3>Care starts with<br/>a conversation</h3><p>Add a Clinical Note after a consultation to build the patient’s care history.</p></aside></div>
+              <div className="care-extra-filters"><label>From<span className="date-clear-wrap"><input type="date" value={careStart} onChange={e => setCareStart(e.target.value)}/>{careStart && <button type="button" className="date-clear-button" aria-label="Clear from date" onClick={() => setCareStart("")}><X size={13}/></button>}</span></label><label>To<span className="date-clear-wrap"><input type="date" min={careStart} value={careEnd} onChange={e => setCareEnd(e.target.value)}/>{careEnd && <button type="button" className="date-clear-button" aria-label="Clear to date" onClick={() => setCareEnd("")}><X size={13}/></button>}</span></label><label>Status<select value={careStatus} onChange={e => setCareStatus(e.target.value)}><option value="all">All statuses</option><option>Published</option><option>Draft</option><option>Available</option></select></label>{!isPatient && <label>Sort<select value={careSort} onChange={e => setCareSort(e.target.value)}><option value="recent">Most recent</option><option value="oldest">Oldest first</option><option value="patient">Patient A-Z</option></select></label>}</div>
+              <div className="care-summary-grid">{[{label:"Progress Entries",value:careCounts.progress,icon:BarChart3,filter:"progress"},{label:"Clinical Notes",value:careCounts.clinical,icon:ClipboardList,filter:"clinical"},{label:"Patient Documents",value:careCounts.documents,icon:Paperclip,filter:"documents"}].map((card) => <button className="care-summary-card" type="button" key={card.label} onClick={() => setFilter(card.filter)}><span className="summary-icon"><card.icon size={22}/></span><span><small>{card.label}</small><strong>{card.value}</strong></span><ChevronRight size={18}/></button>)}</div>
+              <div className="care-records-layout"><section className="panel care-records-panel"><div className="care-panel-head"><h3>Care Records</h3><small>{careRecords.length} shown</small></div>{renderCareRecordCards()}{renderCareRecordsTable()}</section>
+              <div className="care-records-bottom"><section className="panel recent-documents-card"><SectionHead title="Recent Documents" action="View All" onClick={() => setDialog({ kind: "documentsLibrary" })}/>{recentDocuments.length ? <div className="recent-document-grid">{recentDocuments.map((f) => { const patient = patientById(f.patient_id); return <a className="recent-document-row" key={f.id} href={"/api/files?id=" + f.id + "&download=1"}><FileText size={20}/><span><strong>{f.name}</strong><small>{patient?.name || "Patient"} · {date(f.created_at)} · {Math.max(1, Math.round(f.size / 1024))} KB</small></span><Download size={16}/></a>; })}</div> : <Empty title="No patient documents yet" description="Uploaded reports, scans and supporting files will appear here."/>}</section></div></div>
             </section>)}
           {tab === "billing" && (() => {
-              const billingInvoices = data.invoices.filter((invoice) => matches(`${invoice.id} ${invoice.patient} ${invoice.service}`) && (billingStatusFilter === "all" || invoice.status === billingStatusFilter) && (billingServiceFilter === "all" || invoice.service === billingServiceFilter));
+              const clinicianGateActive = isAdmin && !billingClinicianFilter;
+              const billingInvoices = data.invoices.filter((invoice) => matches(`${invoice.id} ${invoice.patient} ${invoice.service}`) && (billingStatusFilter === "all" || invoice.status === billingStatusFilter) && (billingServiceFilter === "all" || invoice.service === billingServiceFilter) && (!isAdmin || !billingClinicianFilter || invoiceClinician(invoice)?.id === billingClinicianFilter));
               const billingServices = Array.from(new Set(data.invoices.map((invoice) => invoice.service))).sort();
-              const unpaidCount = data.invoices.filter((invoice) => invoice.status === "unpaid").length;
-              const paidCount = data.invoices.filter((invoice) => invoice.status === "paid").length;
-              const refundedCount = data.invoices.filter((invoice) => invoice.status === "refunded").length;
-              const recordedPaymentsCount = data.invoices.filter((invoice) => invoice.status === "paid" && invoice.payment_reference).length;
+              const metricsSource = isAdmin ? billingInvoices : data.invoices;
+              const billingOutstanding = metricsSource.filter((i) => i.status === "unpaid").reduce((n, i) => n + i.amount, 0);
+              const billingCollected = metricsSource.filter((i) => i.status === "paid").reduce((n, i) => n + i.amount, 0);
+              const unpaidCount = metricsSource.filter((invoice) => invoice.status === "unpaid").length;
+              const paidCount = metricsSource.filter((invoice) => invoice.status === "paid").length;
+              const refundedCount = metricsSource.filter((invoice) => invoice.status === "refunded").length;
+              const recordedPaymentsCount = metricsSource.filter((invoice) => invoice.status === "paid" && invoice.payment_reference).length;
               return <section className="billing-screen refined-screen">
+                {isAdmin && (() => {
+                  const selectedClinician = data.practitioners.find((p) => p.id === billingClinicianFilter);
+                  const clinicianMatches = data.practitioners.filter((p) => `${p.name} ${clinicianLabel(p.specialty)}`.toLowerCase().includes(billingClinicianQuery.trim().toLowerCase()));
+                  return <section className="panel billing-clinician-gate">
+                    <div><Users size={20}/><div><strong>Select a clinician</strong><p>Choose a clinician to view their billing details and invoices.</p></div></div>
+                    <div className="billing-clinician-combobox" role="combobox" aria-expanded={billingClinicianOpen} aria-haspopup="listbox">
+                      <Search size={16}/>
+                      <input type="text" value={billingClinicianOpen ? billingClinicianQuery : (selectedClinician ? `${selectedClinician.name} · ${clinicianLabel(selectedClinician.specialty)}` : "")} onFocus={() => { setBillingClinicianOpen(true); setBillingClinicianQuery(""); }} onChange={(event) => { setBillingClinicianQuery(event.target.value); setBillingClinicianOpen(true); }} onBlur={() => setTimeout(() => setBillingClinicianOpen(false), 150)} placeholder="Type a clinician's name…" aria-label="Search clinician"/>
+                      {(billingClinicianOpen ? billingClinicianQuery : billingClinicianFilter) && <button type="button" className="billing-clinician-clear" aria-label="Clear clinician selection" onMouseDown={(event) => { event.preventDefault(); setBillingClinicianFilter(""); setBillingClinicianQuery(""); setBillingClinicianOpen(true); (event.currentTarget.previousElementSibling as HTMLInputElement | null)?.focus(); }}><X size={15}/></button>}
+                      {billingClinicianOpen && <div className="billing-clinician-options" role="listbox">
+                        {clinicianMatches.length ? clinicianMatches.map((p) => <button key={p.id} type="button" role="option" aria-selected={billingClinicianFilter === p.id} onMouseDown={(event) => { event.preventDefault(); setBillingClinicianFilter(p.id); setBillingClinicianQuery(""); setBillingClinicianOpen(false); }}>
+                            <Avatar name={p.name}/><span><strong>{p.name}</strong><small>{clinicianLabel(p.specialty)}</small></span>{billingClinicianFilter === p.id && <Check size={16}/>}
+                          </button>) : <p className="billing-clinician-empty">No clinicians match &quot;{billingClinicianQuery}&quot;.</p>}
+                      </div>}
+                    </div>
+                  </section>;
+                })()}
+                {clinicianGateActive ? <Empty icon={Users} title="Select a clinician to continue" description="Billing details, invoices and payment history are shown once you choose a clinician above."/> : <>
                 <div className="billing-metrics">
-                  <article><span><FileText size={22}/></span><small>OUTSTANDING</small><strong>{money(outstanding)}</strong><p>{unpaidCount} unpaid invoices</p></article>
-                  <article><span><Check size={22}/></span><small>TOTAL PAID</small><strong>{money(collected)}</strong><p>{paidCount} invoices paid</p></article>
+                  <article><span><FileText size={22}/></span><small>OUTSTANDING</small><strong>{money(isAdmin ? billingOutstanding : outstanding)}</strong><p>{unpaidCount} unpaid invoices</p></article>
+                  <article><span><Check size={22}/></span><small>TOTAL PAID</small><strong>{money(isAdmin ? billingCollected : collected)}</strong><p>{paidCount} invoices paid</p></article>
                   <article><span><ClipboardList size={22}/></span><small>REFUNDED</small><strong>{refundedCount}</strong><p>Invoices refunded</p></article>
                   <article><span><CreditCard size={22}/></span><small>OFFLINE PAYMENTS RECORDED</small><strong>{recordedPaymentsCount}</strong><p>Total payments in clinic</p></article>
                 </div>
@@ -899,11 +1032,12 @@ export default function Workspace({ data }: {
                   </div>
                   <div className="billing-table-wrap desktop-list">
                     <table className="billing-table">
-                      <thead><tr><th>Invoice No.</th>{!isPatient && <th>Patient</th>}<th>Visit / Service</th><th>Date</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
+                      <thead><tr><th>Invoice No.</th>{!isPatient && <th>Patient</th>}{isAdmin && <th>Clinician</th>}<th>Visit / Service</th><th>Date</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
                       <tbody>
                         {billingInvoices.map((invoice) => (<tr key={invoice.id} className={invoice.status === "unpaid" ? "needs-payment" : ""}>
                           <td><strong>{invoice.id.toUpperCase()}</strong><small>{date(invoice.created_at, { day: "numeric", month: "short", year: "numeric" })}</small></td>
                           {!isPatient && <td>{invoice.patient}</td>}
+                          {isAdmin && <td>{invoiceClinician(invoice)?.name || "—"}</td>}
                           <td>{invoice.service}</td>
                           <td>{date(invoice.created_at, { day: "numeric", month: "short", year: "numeric" })}</td>
                           <td className="amount">{money(invoice.amount)}</td>
@@ -920,7 +1054,7 @@ export default function Workspace({ data }: {
                   </div>
                   <div className="billing-card-list compact-list">
                     {billingInvoices.map((invoice) => (<article className="billing-card" key={invoice.id}>
-                      <div><strong>{invoice.id.toUpperCase()}</strong><small>{invoice.patient}</small><small>{invoice.service}</small></div>
+                      <div><strong>{invoice.id.toUpperCase()}</strong><small>{invoice.patient}</small><small>{invoice.service}</small>{isAdmin && <small>{invoiceClinician(invoice)?.name || "No clinician"}</small>}</div>
                       <span className="billing-card-date">{date(invoice.created_at, { day: "numeric", month: "short", year: "numeric" })}</span>
                       <strong className="billing-card-amount">{money(invoice.amount)}</strong>
                       <Badge tone={invoice.status}>{invoice.status}</Badge>
@@ -932,9 +1066,10 @@ export default function Workspace({ data }: {
                   </div>
                   {!billingInvoices.length && (data.invoices.length ? <Empty icon={Search} title="No Invoices Match Your Filters" description="We couldn't find any invoices matching your current search or filter criteria." action={<button className="button secondary" type="button" onClick={() => { setSearch(""); setBillingStatusFilter("all"); setBillingServiceFilter("all"); }}>Clear Filters</button>}/> : <Empty title="All clear" description="Your invoices will appear here after you book a visit."/>)}
                 </section>
+                </>}
               </section>;
             })()}
-          {tab === "reports" && (() => {
+          {tab === "reports" && (isAdmin ? <AdminReportsScreen data={data}/> : (() => {
               const cancelledCount = data.appointments.filter((appointment) => appointment.status === "cancelled").length;
               const overdueCount = data.appointments.filter(isOverdue).length;
               const totalVisitCount = completed.length + upcoming.length + overdueCount + cancelledCount;
@@ -967,64 +1102,86 @@ export default function Workspace({ data }: {
               return <section className="reports-screen refined-screen">
                 <div className="reports-hero-leaves" aria-hidden="true" />
                 <div className="reports-top-grid">
-                  <article className="report-feature-card"><span className="report-feature-icon mint"><FileText size={26}/></span><div><h3>Clinical reports</h3><p>Download printable PDF summaries of clinical records and treatment plans.</p></div><button className="button primary" onClick={() => navigate("records")}>View reports <ArrowRight size={16}/></button></article>
+                  <article className="report-feature-card"><span className="report-feature-icon mint"><FileText size={26}/></span><div><h3>Clinic reports</h3><p>Download printable operational summaries from your clinic.</p></div><button className="button primary" onClick={() => navigate("records")}>View reports <ArrowRight size={16}/></button></article>
                   {!isPatient && <article className="report-feature-card"><span className="report-feature-icon blue"><Download size={26}/></span><div><h3>Excel export</h3><p>Download your customised patient list, appointments and clinical records.</p></div><a className="button secondary" href="/api/export">Download workbook <Download size={16}/></a></article>}
                   <article className="report-feature-card care-glance-card"><span className="report-feature-icon peach"><TrendingUp size={26}/></span><div><h3>Care at a glance</h3></div>{statusItems.map((item) => <button type="button" className="glance-row" key={item.label} onClick={() => { navigate("appointments"); setFilter(item.filter); }}><span>{item.label} visits</span><strong>{item.count}</strong><ChevronRight size={17}/></button>)}</article>
                 </div>
-                <div className="reports-chart-grid">
+                {!isAdmin && <div className="reports-chart-grid">
                   <section className="reports-panel trend-panel"><div className="reports-panel-head"><div><h3>Visits Trend</h3><p>Total completed visits over the last {trendMonths} months.</p></div><select aria-label="Trend range" value={trendMonths} onChange={(e) => setTrendMonths(Number(e.target.value))}><option value={3}>Last 3 months</option><option value={6}>Last 6 months</option><option value={12}>Last 12 months</option></select></div><div className="trend-chart">{monthBuckets.map((bucket, i) => <div className="trend-column" key={bucket.label + i}><div className="trend-bar-wrap" style={{ height: Math.max(10, bucket.count / maxTrend * 100) + "%" }}><strong className="trend-value">{bucket.count}</strong><span className="trend-bar"/></div><small>{bucket.label}</small></div>)}</div></section>
                   <section className="reports-panel distribution-panel"><div className="reports-panel-head"><div><h3>Visit Status Distribution</h3><p>Overview of all scheduled visits.</p></div></div><div className="distribution-content"><div className="donut-chart" style={{ background: totalVisitCount ? "conic-gradient(#007a5d 0 " + completedPct + "%, #ffc247 " + completedPct + "% " + (completedPct + upcomingPct) + "%, #d9534f " + (completedPct + upcomingPct) + "% " + (completedPct + upcomingPct + overduePct) + "%, #ff8a73 " + (completedPct + upcomingPct + overduePct) + "% 100%)" : "#e3e8e3" }}><span><strong>{totalVisitCount}</strong><small>Total Visits</small></span></div><div className="distribution-legend">{statusItems.map((item, index) => { const pct = [completedPct, upcomingPct, overduePct, cancelledPct][index]; return <div key={item.label}><i style={{ backgroundColor: item.color }} /><span>{item.label}</span><strong>{item.count}</strong><small>{pct}%</small></div>; })}</div></div></section>
-                </div>
+                </div>}
                 <section className="reports-panel recent-reports-panel"><div className="reports-panel-head"><div><h3>Recent Reports</h3><p>Your recently generated and downloaded reports.</p></div><button type="button" className="button secondary" onClick={() => navigate("records")}>View All Reports <ArrowRight size={16}/></button></div>{recentReports.length ? <><div className="recent-reports-table desktop-list"><table><thead><tr><th>Report Name</th><th>Type</th><th>Date Generated</th><th>Generated By</th><th>Actions</th></tr></thead><tbody>{recentReports.map((report) => <tr key={report.id}><td><FileText size={16}/><span>{report.name}</span></td><td><Badge tone={report.type.includes("Clinical") ? "confirmed" : "paid"}>{report.type}</Badge></td><td>{date(report.createdAt, { day: "numeric", month: "short", year: "numeric" })}, {time(report.createdAt)}</td><td>{report.by}</td><td><ReportActions report={report}/></td></tr>)}</tbody></table></div><div className="recent-report-cards compact-list">{recentReports.map((report) => <div className="recent-report-card" key={report.id}><FileText size={20}/><span><strong>{report.name}</strong><small>{report.type} · {date(report.createdAt, { day: "numeric", month: "short", year: "numeric" })}</small></span><ReportActions report={report}/></div>)}</div></> : <Empty icon={FileText} title="No Reports Yet" description="Clinical summaries and billing exports will appear here once generated."/>}</section>
               </section>;
+            })())}
+          {tab === "team" && (() => {
+              const roleName = (person: User) => person.role === "practitioner" ? clinicianLabel(person.specialty) : person.role === "admin" ? "Administrator" : "Patient";
+              const roleTone = (person: User) => person.role === "admin" ? "lavender" : person.role === "practitioner" ? (person.specialty === "psychologist" ? "peach" : "blue") : "gray";
+              const activeCount = data.users.filter(person => person.active).length;
+              const clinicianCount = data.users.filter(person => person.active && person.role === "practitioner").length;
+              const adminCount = data.users.filter(person => person.active && person.role === "admin").length;
+              const inactiveCount = data.users.filter(person => !person.active && person.role !== "patient").length;
+              const teamPageSize = 6;
+              const teamPageCount = Math.max(1, Math.ceil(teamUsers.length / teamPageSize));
+              const teamCurrentPage = Math.min(teamPage, teamPageCount);
+              const pageTeamUsers = teamUsers.slice((teamCurrentPage - 1) * teamPageSize, teamCurrentPage * teamPageSize);
+              const RolePill = ({ person }: { person: User }) => person.id === u.id
+                  ? <Badge>{roleName(person)}</Badge>
+                  : <span className={`role-pill role-${roleTone(person)}`}>{roleName(person)}</span>;
+              const TeamActions = ({ person }: { person: User }) => <div className="team-actions"><button type="button" className="kebab-button" aria-label={`Actions for ${person.name}`} title="Actions" aria-haspopup="menu" aria-expanded={teamMenuId === person.id} onClick={(e) => { if (teamMenuId === person.id) { setTeamMenuId(null); return; } const rect = e.currentTarget.getBoundingClientRect(); setTeamMenuPos({ top: rect.bottom + 6, left: rect.right - 180 }); setTeamMenuId(person.id); }}>⋮</button>{teamMenuId === person.id && teamMenuPos && <><div className="row-menu-backdrop" onClick={() => setTeamMenuId(null)}/><div className="row-menu-dropdown" role="menu" style={{ top: teamMenuPos.top, left: teamMenuPos.left }}><button type="button" role="menuitem" onClick={() => { setTeamMenuId(null); setDialog(person.role === "patient" ? { kind: "patient", patient: person } : { kind: "staffUser", user: person }); }}>View profile</button>{person.id !== u.id && <><button type="button" role="menuitem" onClick={() => { setTeamMenuId(null); setDialog(person.role === "patient" ? { kind: "editPatient", patient: person } : { kind: "editStaffUser", user: person }); }}>Edit user</button><button type="button" role="menuitem" onClick={() => { setTeamMenuId(null); setDialog({ kind: "reset", user: person }); }}>Reset password</button><button type="button" role="menuitem" className="danger" disabled={pending} onClick={() => { setTeamMenuId(null); action("toggleUser", { id: person.id }, false); }}>{person.active ? "Deactivate account" : "Reactivate account"}</button>{isAdmin && person.role !== "patient" && <button type="button" role="menuitem" className="danger" onClick={() => { setTeamMenuId(null); setDeleteStaffTarget({ id: person.id, name: person.name }); }}>Delete account</button>}</>}</div></>}</div>;
+              const roleFilterOptions = ["all", "Administrator", "Physiotherapist", "Psychologist", "Patient"];
+              return <section className="team-access-screen refined-screen">
+                <button type="button" className="button primary team-mobile-add" onClick={() => setDialog({ kind: "user" })}><Plus size={17}/>Add User</button>
+                <div className="team-access-callout"><div><Users size={18}/><strong>Give the right access to the right people.</strong></div><button className="button primary" onClick={() => setDialog({ kind: "user" })}><Plus size={16}/>Add User</button></div>
+                <div className="team-summary-grid">
+                  {([ ["Total Team Members", activeCount, "All active users", Users, "mint"], ["Clinicians", clinicianCount, `${data.users.filter(p => p.active && p.role === "practitioner" && p.specialty === "physiotherapist").length} Physiotherapists · ${data.users.filter(p => p.active && p.role === "practitioner" && p.specialty === "psychologist").length} Psychologists`, HeartPulse, "blue"], ["Administrators", adminCount, "Full access", ShieldCheck, "lavender"], ["Inactive Users", inactiveCount, "Deactivated accounts", Users, "peach"] ] as Array<[string, number, string, LucideIcon, string]>).map(([label, value, sub, Icon, tone]: [string, number, string, LucideIcon, string]) => <article className={`team-summary-card ${tone}`} key={String(label)}><span className="team-summary-icon"><Icon size={23}/></span><div><span>{label}</span><strong>{value}</strong><small>{sub}</small></div></article>)}
+                </div>
+                <section className="panel team-members-panel"><div className="team-members-head"><div><h2>Team Members</h2><p>View and manage all clinic users, their roles and access permissions.</p></div><div className="team-filter-tools"><SearchInput value={search} onChange={(v) => { setSearch(v); setTeamPage(1); }} placeholder="Search by name, email or role..."/><select aria-label="Filter by role" value={teamRole} onChange={e => { setTeamRole(e.target.value); setTeamPage(1); }}><option value="all">All Roles</option><option value="Administrator">Administrator</option><option value="Physiotherapist">Physiotherapist</option><option value="Psychologist">Psychologist</option><option value="Patient">Patient</option></select><button type="button" className="team-mobile-filter-trigger" onClick={() => setMobileTeamFilterOpen(true)}><SlidersHorizontal size={15}/>{teamRole === "all" ? "All Roles" : teamRole}<ChevronDown size={15}/></button></div></div>
+                  {teamUsers.length ? <><div className="team-table-wrap"><table className="data-table team-table"><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Last Active</th><th>Actions</th></tr></thead><tbody>{pageTeamUsers.map(person => <tr key={person.id}><td><div className="person"><Avatar name={person.name} avatar={person.avatar}/><span><strong>{person.name}</strong><small>{roleName(person)}</small></span></div></td><td className="team-email">{person.email}</td><td><RolePill person={person}/></td><td><Badge tone={person.active ? "completed" : "cancelled"}>{person.active ? "Active" : "Inactive"}</Badge></td><td>{person.id === u.id ? "Today" : "—"}</td><td><TeamActions person={person}/></td></tr>)}</tbody></table></div><div className="team-card-list">{pageTeamUsers.map(person => <article className="team-user-card" key={person.id}><Avatar name={person.name} avatar={person.avatar}/><div className="team-user-card-main"><div className="team-user-card-headrow"><strong>{person.name}</strong><button type="button" className="icon-button" aria-label={`Actions for ${person.name}`} onClick={() => setMobileActionsFor(person)}><MoreVertical size={18}/></button></div><small className="team-card-role">{roleName(person)}</small><p className="team-card-email" title={person.email}>{person.email}</p><div className="team-card-meta"><Badge tone={person.active ? "completed" : "cancelled"}>{person.active ? "Active" : "Inactive"}</Badge><span>{person.id === u.id ? "Today" : "—"}</span></div></div></article>)}</div></> : <Empty title="No users match your search" description="Clear the search or role filter to see more accounts."/>}
+                  {teamUsers.length > 0 && <div className="team-results-count">
+                    <span>Showing {(teamCurrentPage - 1) * teamPageSize + 1}–{Math.min(teamCurrentPage * teamPageSize, teamUsers.length)} of {teamUsers.length} users</span>
+                    {teamPageCount > 1 && <div className="team-pagination-controls">
+                      <button type="button" className="button secondary team-pagination-btn" aria-label="Previous page" disabled={teamCurrentPage <= 1} onClick={() => setTeamPage(teamCurrentPage - 1)}><ChevronLeft size={15}/><span>Previous</span></button>
+                      <span className="team-pagination-page">{teamCurrentPage}</span>
+                      <button type="button" className="button secondary team-pagination-btn" aria-label="Next page" disabled={teamCurrentPage >= teamPageCount} onClick={() => setTeamPage(teamCurrentPage + 1)}><span>Next</span><ChevronRight size={15}/></button>
+                    </div>}
+                  </div>}
+                </section>
+                {mobileTeamFilterOpen && <div className="logout-modal-backdrop team-sheet-backdrop" role="presentation" onClick={() => setMobileTeamFilterOpen(false)} onKeyDown={(event) => { if (event.key === "Escape") setMobileTeamFilterOpen(false); }}>
+                  <div className="team-bottom-sheet" role="dialog" aria-modal="true" aria-labelledby="team-filter-title" onClick={(event) => event.stopPropagation()}>
+                    <div className="team-sheet-handle" aria-hidden="true"/>
+                    <div className="team-sheet-head"><h2 id="team-filter-title">Search &amp; Filter</h2><button type="button" className="icon-button" aria-label="Close" onClick={() => setMobileTeamFilterOpen(false)}><X size={18}/></button></div>
+                    <SearchInput value={search} onChange={(v) => { setSearch(v); setTeamPage(1); }} placeholder="Search by name, email or role..."/>
+                    <h3 className="team-sheet-subhead">Filter by Role</h3>
+                    <div className="team-sheet-radio-list">{roleFilterOptions.map((option) => <label key={option} className="team-sheet-radio"><input type="radio" name="teamRoleFilter" checked={teamRole === option} onChange={() => { setTeamRole(option); setTeamPage(1); }}/><span>{option === "all" ? "All Roles" : option}</span></label>)}</div>
+                    <div className="team-sheet-actions"><button type="button" className="button secondary" onClick={() => { setTeamRole("all"); setSearch(""); setTeamPage(1); }}>Clear</button><button type="button" className="button primary" onClick={() => setMobileTeamFilterOpen(false)}>Apply</button></div>
+                  </div>
+                </div>}
+                {mobileActionsFor && <div className="logout-modal-backdrop team-sheet-backdrop" role="presentation" onClick={() => setMobileActionsFor(null)} onKeyDown={(event) => { if (event.key === "Escape") setMobileActionsFor(null); }}>
+                  <div className="team-bottom-sheet" role="dialog" aria-modal="true" aria-labelledby="team-actions-title" onClick={(event) => event.stopPropagation()}>
+                    <div className="team-sheet-handle" aria-hidden="true"/>
+                    <div className="team-sheet-head"><h2 id="team-actions-title">User Actions</h2><button type="button" className="icon-button" aria-label="Close" onClick={() => setMobileActionsFor(null)}><X size={18}/></button></div>
+                    <div className="team-sheet-action-list">
+                      <button type="button" onClick={() => { const person = mobileActionsFor; setMobileActionsFor(null); setDialog(person.role === "patient" ? { kind: "patient", patient: person } : { kind: "staffUser", user: person }); }}><Eye size={17}/>View Profile</button>
+                      <button type="button" onClick={() => { const person = mobileActionsFor; setMobileActionsFor(null); setDialog(person.role === "patient" ? { kind: "editPatient", patient: person } : { kind: "editStaffUser", user: person }); }}><Pencil size={17}/>Edit User</button>
+                      <button type="button" onClick={() => { const person = mobileActionsFor; setMobileActionsFor(null); setDialog({ kind: "reset", user: person }); }}><ShieldCheck size={17}/>Reset Password</button>
+                      {mobileActionsFor.id !== u.id && <button type="button" className={mobileActionsFor.active ? "danger-text" : "positive-text"} onClick={() => { const person = mobileActionsFor; setMobileActionsFor(null); setConfirmToggleTarget(person); }}><Trash2 size={17}/>{mobileActionsFor.active ? "Deactivate Account" : "Reactivate Account"}</button>}
+                    </div>
+                  </div>
+                </div>}
+                {confirmToggleTarget && <div className="logout-modal-backdrop" role="presentation" onKeyDown={(event) => { if (event.key === "Escape") setConfirmToggleTarget(null); }}>
+                  <div className="logout-confirmation" role="dialog" aria-modal="true" aria-labelledby="toggle-user-title" aria-describedby="toggle-user-description">
+                    <button type="button" className="logout-close" aria-label="Cancel" onClick={() => setConfirmToggleTarget(null)} disabled={pending}><X size={17}/></button>
+                    <div className="logout-confirmation-icon" aria-hidden="true">{confirmToggleTarget.active ? <Trash2 size={30}/> : <Check size={30}/>}</div>
+                    <h2 id="toggle-user-title">{confirmToggleTarget.active ? "Deactivate" : "Reactivate"} {confirmToggleTarget.name}?</h2>
+                    <p id="toggle-user-description">{confirmToggleTarget.active ? "This user will no longer be able to sign in. Their historical data stays intact." : "This will restore sign-in access based on their assigned workspace."}</p>
+                    <div className="logout-confirmation-actions">
+                      <button type="button" className="logout-cancel" autoFocus onClick={() => setConfirmToggleTarget(null)} disabled={pending}>Cancel</button>
+                      <button type="button" className="logout-confirm" disabled={pending} onClick={() => { const target = confirmToggleTarget; action("toggleUser", { id: target.id }, false); setConfirmToggleTarget(null); }}>{pending ? "Saving…" : confirmToggleTarget.active ? "Deactivate Account" : "Reactivate Account"}</button>
+                    </div>
+                  </div>
+                </div>}
+              </section>;
             })()}
-          {tab === "team" && (<section className="panel">
-              <SectionHead title="People & permissions" description="Administrators have operational access. Clinical Records stay with the care team."/>
-              <div className="table-scroll">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>User</th>
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Status</th>
-                      <th>Access</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.users.map((person) => (<tr key={person.id}>
-                        <td>
-                          <div className="person">
-                            <Avatar name={person.name}/>
-                            <strong>{person.name}</strong>
-                          </div>
-                        </td>
-                        <td>{person.email}</td>
-                        <td>
-                          {person.role === "practitioner" ? <select aria-label={"Specialty for " + person.name} value={person.specialty || ""} disabled={pending} onChange={e => action("specialty", {id:person.id, specialty:e.target.value}, false)}><option value="" disabled>Choose specialty</option><option value="psychologist">Psychologist</option><option value="physiotherapist">Physiotherapist</option></select> : <Badge>{person.role}</Badge>}
-                        </td>
-                        <td>
-                          <Badge tone={person.active ? "completed" : "cancelled"}>
-                            {person.active ? "Active" : "Inactive"}
-                          </Badge>
-                        </td>
-                        <td>
-                          <button className="text-button" disabled={person.id === u.id || pending} onClick={() => action("toggleUser", { id: person.id }, false)}>
-                            {person.id === u.id
-                    ? "Current account"
-                    : person.active
-                        ? "Deactivate"
-                        : "Activate"}
-                          </button>
-                          {person.id !== u.id && (<button className="text-button reset-button" disabled={pending} onClick={() => setDialog({ kind: "reset", user: person })}>
-                              Reset password
-                            </button>)}
-                        </td>
-                      </tr>))}
-                  </tbody>
-                </table>
-              </div>
-            </section>)}
           {tab === "notifications" && (() => {
               const notificationKind = (item: typeof data.notifications[number]) => {
                 const text = (item.title + " " + item.message).toLowerCase();
@@ -1036,7 +1193,7 @@ export default function Workspace({ data }: {
               const notificationTabs = [["all", "All"], ["appointments", "Appointments"], ["reports", "Reports"], ["system", "System Updates"]];
               return <section className="notifications-screen refined-screen"><div className="settings-leaf-accent" aria-hidden="true" /><div className="notifications-toolbar"><div className="notification-tabs">{notificationTabs.map(([value, label]) => <button type="button" key={value} className={notificationCategory === value ? "selected" : ""} onClick={() => setNotificationCategory(value)}>{label}</button>)}</div><div className="notification-tools"><select value={notificationTimeFilter} onChange={(event) => setNotificationTimeFilter(event.target.value)} aria-label="Notification read filter"><option value="all">All</option><option value="unread">Unread</option><option value="read">Read</option></select><button className="text-button" disabled={pending} onClick={() => action("read", { id: "" }, false)}><Check size={16}/>Mark all as read</button></div></div><section className="notifications-list-card">{filteredNotifications.length ? filteredNotifications.map((item) => { const kind = notificationKind(item); const Icon = kind === "reports" ? FileText : kind === "system" ? Settings : CalendarDays; return <article className={"notification-item " + (!item.is_read ? "unread" : "")} key={item.id} role={!item.is_read ? "button" : undefined} tabIndex={!item.is_read ? 0 : undefined} onClick={() => !item.is_read && action("read", { id: item.id }, false)} onKeyDown={(e) => { if (!item.is_read && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); action("read", { id: item.id }, false); } }}><span className={"notification-kind-icon " + kind}><Icon size={20}/></span><div><h3>{item.title}</h3><p>{item.message}</p><small>{date(item.created_at, { day: "numeric", month: "short", year: "numeric" })}, {time(item.created_at)}</small></div>{!item.is_read && <button type="button" className="icon-button" aria-label="Mark as read" onClick={(e) => { e.stopPropagation(); action("read", { id: item.id }, false); }}><ChevronRight size={18}/></button>}</article>; }) : <Empty title="You are all caught up" description="Your clinic updates will appear here."/>}</section></section>;
             })()}
-          {tab === "settings" && (<section className="settings-screen refined-screen"><div className="settings-leaf-accent" aria-hidden="true" /><section className="settings-card personal-details-card"><div className="settings-card-head">{isPatient ? <span className="settings-card-icon mint"><Users size={26}/></span> : <div className="settings-avatar-control"><label className="settings-avatar-button" htmlFor="settings-avatar-input" title={u.avatar ? "Change profile picture" : "Add profile picture"}><Avatar name={u.name} avatar={u.avatar} size="large"/><span className="settings-avatar-edit-badge" aria-hidden="true"><Camera size={12}/></span></label><input id="settings-avatar-input" type="file" accept="image/png,image/jpeg,image/webp" disabled={avatarPending} onChange={e => { const file = e.target.files?.[0]; if (file) uploadAvatar(file); e.target.value = ""; }}/>{u.avatar && <button type="button" className="settings-avatar-remove-btn" aria-label="Remove profile picture" title="Remove profile picture" disabled={avatarPending} onClick={removeAvatar}><X size={11}/></button>}</div>}<div><h3>Personal details</h3><p>Keep your contact details up to date. This information is used across your account.</p>{!isPatient && avatarError && <small className="form-error">{avatarError}</small>}</div></div><form action={formAction("profile")}><label>Full name<input name="name" defaultValue={u.name} required maxLength={200}/></label><label>Email address<input value={u.email} disabled readOnly/><small className="muted">Contact your clinic administrator to change your email address.</small></label><label>Phone number<input name="phone" type="tel" inputMode="numeric" pattern="[0-9]*" defaultValue={u.phone} onInput={e => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, "").slice(0, 10); }}/></label>{isPatient ? <label>Medical history<textarea name="history" defaultValue={u.history} rows={4} maxLength={5000}/></label> : <input name="history" type="hidden" value={u.history}/>}<button className="button primary full" disabled={pending}>Save profile</button></form></section><section className="settings-card password-security-card"><div className="settings-card-head"><span className="settings-card-icon blue"><ShieldCheck size={26}/></span><div><h3>Password & security</h3><p>Change your password to keep your account secure.</p></div></div><form onSubmit={retainOnError("password")}><label>Current password<span className="password-field-wrap"><input type={passwordVisible.current ? "text" : "password"} name="current" autoComplete="current-password" placeholder="Enter your current password" required/><button type="button" className="password-toggle-btn" aria-label={passwordVisible.current ? "Hide password" : "Show password"} onClick={() => setPasswordVisible(v => ({ ...v, current: !v.current }))}>{passwordVisible.current ? <EyeOff size={16}/> : <Eye size={16}/>}</button></span></label><label>New password<span className="password-field-wrap"><input type={passwordVisible.next ? "text" : "password"} name="next" autoComplete="new-password" minLength={8} maxLength={15} placeholder="Enter a new password" required onChange={e => { const confirmEl = e.currentTarget.form?.elements.namedItem("confirm") as HTMLInputElement | null; if (confirmEl && confirmEl.value) confirmEl.setCustomValidity(confirmEl.value === e.currentTarget.value ? "" : "Passwords do not match."); }}/><button type="button" className="password-toggle-btn" aria-label={passwordVisible.next ? "Hide password" : "Show password"} onClick={() => setPasswordVisible(v => ({ ...v, next: !v.next }))}>{passwordVisible.next ? <EyeOff size={16}/> : <Eye size={16}/>}</button></span></label><small className="muted">Use at least 8 characters, including letters and numbers.</small><label>Confirm new password<span className="password-field-wrap"><input type={passwordVisible.confirm ? "text" : "password"} name="confirm" autoComplete="new-password" minLength={8} maxLength={15} placeholder="Confirm your new password" required onChange={e => { const nextEl = e.currentTarget.form?.elements.namedItem("next") as HTMLInputElement | null; e.currentTarget.setCustomValidity(nextEl && nextEl.value === e.currentTarget.value ? "" : "Passwords do not match."); }}/><button type="button" className="password-toggle-btn" aria-label={passwordVisible.confirm ? "Hide password" : "Show password"} onClick={() => setPasswordVisible(v => ({ ...v, confirm: !v.confirm }))}>{passwordVisible.confirm ? <EyeOff size={16}/> : <Eye size={16}/>}</button></span></label><button className="button secondary full" disabled={pending}>Update password</button></form></section>{isAdmin && <section className="settings-card admin-settings-card"><SectionHead title="Clinic settings"/><form action={formAction("settings")}><label>Clinic name<input name="clinicName" defaultValue={data.settings.clinicName} required/></label><label>Address<input name="address" defaultValue={data.settings.address} required/></label><label>Patient cancellation notice in hours<input name="cancellationHours" type="number" min={0} max={168} defaultValue={data.settings.cancellationHours} required/></label><button className="button primary full" disabled={pending}>Save clinic settings</button></form></section>}</section>)}
+          {tab === "settings" && (<section className="settings-screen refined-screen"><div className="settings-leaf-accent" aria-hidden="true" /><section className="settings-card personal-details-card"><div className="settings-card-head"><div className="settings-avatar-control"><label className="settings-avatar-button" htmlFor="settings-avatar-input" title={u.avatar ? "Change profile picture" : "Add profile picture"}><Avatar name={u.name} avatar={u.avatar} size="large"/><span className="settings-avatar-edit-badge" aria-hidden="true"><Camera size={12}/></span></label><input id="settings-avatar-input" type="file" accept="image/png,image/jpeg,image/webp" disabled={avatarPending} onChange={e => { const file = e.target.files?.[0]; if (file) uploadAvatar(file); e.target.value = ""; }}/>{u.avatar && <button type="button" className="settings-avatar-remove-btn" aria-label="Remove profile picture" title="Remove profile picture" disabled={avatarPending} onClick={removeAvatar}><X size={11}/></button>}</div><div><h3>Personal details</h3><p>Keep your contact details up to date. This information is used across your account.</p>{!isPatient && avatarError && <small className="form-error">{avatarError}</small>}</div></div><form action={formAction("profile")}><label>Full name<input name="name" defaultValue={u.name} required maxLength={200}/></label><label>Email address<input value={u.email} disabled readOnly/><small className="muted">Contact your clinic administrator to change your email address.</small></label><label>Phone number<input name="phone" type="tel" inputMode="numeric" pattern="[0-9]*" defaultValue={u.phone} onInput={e => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, "").slice(0, 10); }}/></label>{isPatient ? <label>Medical history<textarea name="history" defaultValue={u.history} rows={4} maxLength={5000}/></label> : <input name="history" type="hidden" value={u.history}/>}<button className="button primary full" disabled={pending}>Save profile</button></form></section><section className="settings-card password-security-card"><div className="settings-card-head"><span className="settings-card-icon blue"><ShieldCheck size={26}/></span><div><h3>Password & security</h3><p>Change your password to keep your account secure.</p></div></div><form onSubmit={retainOnError("password")}><label>Current password<span className="password-field-wrap"><input type={passwordVisible.current ? "text" : "password"} name="current" autoComplete="current-password" placeholder="Enter your current password" required/><button type="button" className="password-toggle-btn" aria-label={passwordVisible.current ? "Hide password" : "Show password"} onClick={() => setPasswordVisible(v => ({ ...v, current: !v.current }))}>{passwordVisible.current ? <EyeOff size={16}/> : <Eye size={16}/>}</button></span></label><label>New password<span className="password-field-wrap"><input type={passwordVisible.next ? "text" : "password"} name="next" autoComplete="new-password" minLength={8} maxLength={15} placeholder="Enter a new password" required onChange={e => { const confirmEl = e.currentTarget.form?.elements.namedItem("confirm") as HTMLInputElement | null; if (confirmEl && confirmEl.value) confirmEl.setCustomValidity(confirmEl.value === e.currentTarget.value ? "" : "Passwords do not match."); }}/><button type="button" className="password-toggle-btn" aria-label={passwordVisible.next ? "Hide password" : "Show password"} onClick={() => setPasswordVisible(v => ({ ...v, next: !v.next }))}>{passwordVisible.next ? <EyeOff size={16}/> : <Eye size={16}/>}</button></span></label><small className="muted">Use at least 8 characters, including letters and numbers.</small><label>Confirm new password<span className="password-field-wrap"><input type={passwordVisible.confirm ? "text" : "password"} name="confirm" autoComplete="new-password" minLength={8} maxLength={15} placeholder="Confirm your new password" required onChange={e => { const nextEl = e.currentTarget.form?.elements.namedItem("next") as HTMLInputElement | null; e.currentTarget.setCustomValidity(nextEl && nextEl.value === e.currentTarget.value ? "" : "Passwords do not match."); }}/><button type="button" className="password-toggle-btn" aria-label={passwordVisible.confirm ? "Hide password" : "Show password"} onClick={() => setPasswordVisible(v => ({ ...v, confirm: !v.confirm }))}>{passwordVisible.confirm ? <EyeOff size={16}/> : <Eye size={16}/>}</button></span></label><button className="button secondary full" disabled={pending}>Update password</button></form></section>{isDoctor && (u.specialty === "physiotherapist" || u.specialty === "psychologist") && <section className="settings-card practitioner-branding-card"><div className="settings-card-head"><span className="settings-card-icon mint"><FileText size={26}/></span><div><h3>Practice / Report Logo</h3><p>Used on generated reports and invoices. MindSpine branding is used when no custom logo is uploaded.</p></div></div><div className="branding-logo-preview">{u.practitioner_logo ? <img src={u.practitioner_logo} alt="Current practice logo" /> : <span>MindSpine</span>}</div><div className="branding-logo-actions"><label className="button secondary" htmlFor="settings-logo-input">{u.practitioner_logo ? "Replace Logo" : "Upload Logo"}<input id="settings-logo-input" type="file" accept="image/png,image/jpeg" hidden disabled={logoPending} onChange={e => { const file=e.target.files?.[0]; if(file) uploadLogo(file); e.target.value=""; }}/></label>{u.practitioner_logo && <button type="button" className="button danger" disabled={logoPending} onClick={removeLogo}>Remove Logo</button>}</div>{logoError && <small className="form-error">{logoError}</small>}</section>}{isAdmin && <section className="settings-card admin-settings-card"><SectionHead title="Clinic settings"/><form action={formAction("settings")}><label>Clinic name<input name="clinicName" defaultValue={data.settings.clinicName} required/></label><label>Address<input name="address" defaultValue={data.settings.address} required/></label><label>Patient cancellation notice in hours<input name="cancellationHours" type="number" min={0} max={168} defaultValue={data.settings.cancellationHours} required/></label><button className="button primary full" disabled={pending}>Save clinic settings</button></form></section>}</section>)}
           <footer className="workspace-footer">
             <span>
               MindSpine <i /> Care, connected.
@@ -1048,7 +1205,7 @@ export default function Workspace({ data }: {
           </footer>
         </main>
       </div>
-      {dialog && (<Modal className={dialog.kind === "user" && dialog.role === "patient" ? "care-modal patient-create-modal" : dialog.kind === "book" ? "care-modal appointment-modal" : dialog.kind === "schedule" ? "care-modal availability-modal" : dialog.kind === "patient" || dialog.kind === "appointment" ? "care-modal detail-modal" : dialog.kind === "editPatient" ? "care-modal patient-edit-modal" : dialog.kind === "clinicalRecord" || dialog.kind === "documentsLibrary" || dialog.kind === "note" || dialog.kind === "progressEntry" ? "care-modal care-record-modal" : ""} title={dialog.kind === "book"
+          {dialog && (<Modal className={dialog.kind === "user" ? "care-modal account-create-modal" : dialog.kind === "book" ? "care-modal appointment-modal" : dialog.kind === "schedule" ? "care-modal availability-modal" : dialog.kind === "patient" || dialog.kind === "staffUser" || dialog.kind === "appointment" ? "care-modal detail-modal" : dialog.kind === "editPatient" || dialog.kind === "editStaffUser" ? "care-modal patient-edit-modal" : dialog.kind === "clinicalRecord" || dialog.kind === "documentsLibrary" || dialog.kind === "note" || dialog.kind === "progressEntry" ? "care-modal care-record-modal" : ""} title={dialog.kind === "book"
                 ? dialog.appointment
                     ? "Reschedule your visit"
                     : "Book An Appointment"
@@ -1060,10 +1217,14 @@ export default function Workspace({ data }: {
                             ? "Patient Documents"
                     : dialog.kind === "progressEntry"
                         ? (dialog.index !== undefined ? "Edit Progress Entry" : "Add Progress Entry")
+                    : dialog.kind === "staffUser"
+                        ? `View ${dialog.user.role === "admin" ? "Administrator" : clinicianLabel(dialog.user.specialty)}`
                     : dialog.kind === "patient"
                         ? "Patient Details"
                         : dialog.kind === "editPatient"
                             ? "Edit Patient"
+                            : dialog.kind === "editStaffUser"
+                                ? `Edit ${dialog.user.role === "admin" ? "Administrator" : clinicianLabel(dialog.user.specialty)}`
                             : dialog.kind === "appointment"
                             ? "Appointment Details"
                             : dialog.kind === "invoice"
@@ -1088,6 +1249,8 @@ export default function Workspace({ data }: {
                         ? "Set your available slots so patients can book appointments."
                         : dialog.kind === "note" && dialog.note
                             ? "Make changes to this clinical note and save."
+                        : dialog.kind === "editStaffUser"
+                            ? "Update this account's details."
                         : undefined} onClose={() => {
                 if (!pending)
                     setDialog(null);
@@ -1143,22 +1306,46 @@ export default function Workspace({ data }: {
                         {selected && <Check size={18}/>}
                       </button>;
                     })}
-                    {patientQuery && patientMatches.length === 0 && <p>No matching patients found.</p>}
+                    {patientQuery && patientMatches.length === 0 && <p>{chosenPractitioner ? "No matching patients found for this clinician." : "No matching patients found."}</p>}
                   </div>
                 </div>)}
-              <label>
+              {!dialog.appointment && !isDoctor ? (() => {
+                  const clinicianMatches = data.practitioners.filter((p) => `${p.name}${p.role === "practitioner" ? ` · ${clinicianLabel(p.specialty)}` : ""}`.toLowerCase().includes(clinicianQuery.trim().toLowerCase()));
+                  const chooseClinician = (nextPractitioner: string, label: string) => {
+                      setChosenPractitioner(nextPractitioner);
+                      setClinicianQuery(label);
+                      setChosenDay("");
+                      setSelectedSlotId("");
+                      if (nextPractitioner && selectedPatient && (selectedPatient.clinicianIds ?? []).length && !(selectedPatient.clinicianIds ?? []).includes(nextPractitioner)) {
+                          setSelectedPatientId("");
+                          setPatientQuery("");
+                      }
+                  };
+                  return <div className="patient-combobox">
+                    <label htmlFor="appointment-clinician-search">Clinician <span aria-hidden="true">*</span></label>
+                    <div className="patient-search-wrap" role="combobox" aria-expanded="true" aria-controls="appointment-clinician-options">
+                      <Search size={18}/>
+                      <input id="appointment-clinician-search" type="search" value={clinicianQuery} onChange={(event) => { setClinicianQuery(event.target.value); if (chosenPractitioner) setChosenPractitioner(""); }} placeholder="Search and select a clinician..." autoComplete="off"/>
+                    </div>
+                    <div className="patient-options" id="appointment-clinician-options" role="listbox">
+                      {clinicianMatches.map((p) => {
+                          const label = `${p.name}${p.role === "practitioner" ? ` · ${clinicianLabel(p.specialty)}` : ""}`;
+                          const selected = chosenPractitioner === p.id;
+                          return <button key={p.id} type="button" role="option" aria-selected={selected} className={selected ? "selected" : ""} onClick={() => chooseClinician(p.id, label)}>
+                            <Avatar name={p.name}/>
+                            <span><strong>{p.name}</strong><small>{p.role === "practitioner" ? clinicianLabel(p.specialty) : "Administrator"}</small></span>
+                            {selected && <Check size={18}/>}
+                          </button>;
+                      })}
+                      {clinicianQuery && clinicianMatches.length === 0 && <p>No matching clinicians found.</p>}
+                    </div>
+                  </div>;
+                })() : <label>
                 Clinician
-                <select aria-label="Clinician" value={chosenPractitioner} onChange={(e) => {
-                    setChosenPractitioner(e.target.value);
-                    setChosenDay("");
-                    setSelectedSlotId("");
-                }} disabled={!!dialog.appointment || isDoctor} required>
-                  <option value="">Choose a practitioner</option>
-                  {data.practitioners.map((p) => (<option value={p.id} key={p.id}>
-                      {p.name}{p.role === "practitioner" ? ` · ${clinicianLabel(p.specialty)}` : ""}
-                    </option>))}
+                <select aria-label="Clinician" value={chosenPractitioner} disabled required>
+                  <option value={chosenPractitioner}>{data.practitioners.find((p) => p.id === chosenPractitioner)?.name || "—"}</option>
                 </select>
-              </label>
+              </label>}
               {!dialog.appointment && (<label>
                   Appointment type
                   <select aria-label="Appointment type" name="service" required>
@@ -1445,7 +1632,7 @@ export default function Workspace({ data }: {
                 New password
                 <input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={15} required/>
               </label>
-              <small className="muted">Use at least 8 characters, including letters and numbers.</small>
+              <small className="muted password-hint">Use at least 8 characters, including letters and numbers.</small>
               <p className="form-note">
                 Share the new password through your approved secure channel.
                 Email password recovery is not connected.
@@ -1463,6 +1650,8 @@ export default function Workspace({ data }: {
                     <p>Basic details about the patient.</p>
                   </div>
                 </div>
+                <label>Profile Picture <span className="muted">(Optional)</span><input name="avatar_file" type="file" accept="image/png,image/jpeg" onChange={e => { const file=e.currentTarget.files?.[0]; const hidden=e.currentTarget.form?.elements.namedItem("avatar") as HTMLInputElement | null; readImageFile("newPatientAvatar", MAX_IMAGE_MB, file, hidden, e.currentTarget); }}/><small className="muted upload-hint">Up to {MAX_IMAGE_MB} MB.</small>{imageWarnings.newPatientAvatar && <small className="form-error">{imageWarnings.newPatientAvatar}</small>}</label>
+                <input type="hidden" name="avatar"/>
                 <div className="care-field-grid two-columns">
                   <label>
                     Full Name <span aria-hidden="true">*</span>
@@ -1525,38 +1714,32 @@ export default function Workspace({ data }: {
                 <button className="button primary" disabled={pending}>{pending ? "Creating…" : "Create Patient"}</button>
               </div>
             </form>) : (<form action={formAction("user")}>
-              <label>
-                Full Name
-                <input name="name" required/>
-              </label>
-              <label>
-                Email
-                <input name="email" type="email" required/>
-              </label>
-              <label>
-                Role
-                <select aria-label="Role" name="role" defaultValue={dialog.role === "practitioner" ? "psychologist" : "patient"}>
-                  <option value="patient">Patient</option>
-                  {isAdmin && <><option value="psychologist">Psychologist</option>
-                  <option value="physiotherapist">Physiotherapist</option>
-                  <option value="admin">Administrator</option></>}
-                </select>
-              </label>
-              <label>
-                Phone (optional)
-                <input name="phone" type="tel" inputMode="numeric" pattern="[0-9]*" autoComplete="tel" onInput={e => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, "").slice(0, 10); }}/>
-              </label>
-              <label>
-                Initial password
-                <input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={15} required/>
-              </label>
-              <p className="form-note">
-                Use at least 8 characters, including letters and numbers. Share credentials through your approved secure process. The user
-                can change the password in Settings.
-              </p>
-              <button className="button primary full" disabled={pending}>
-                Create user
-              </button>
+              <section className="account-create-grid">
+                <div className="account-create-column">
+                  <section className="care-form-card account-profile-card">
+                    <div className="care-form-card-head"><span className="care-form-icon"><Users size={25}/></span><div><h3>Profile</h3><p>Create the user profile and contact details.</p></div></div>
+                    <label>Profile picture <span className="muted">(Optional)</span><input name="avatar_file" type="file" accept="image/png,image/jpeg" onChange={e => { const file=e.currentTarget.files?.[0]; const hidden=e.currentTarget.form?.elements.namedItem("avatar") as HTMLInputElement | null; readImageFile("newUserAvatar", MAX_IMAGE_MB, file, hidden, e.currentTarget); }}/><small className="muted upload-hint">Up to {MAX_IMAGE_MB} MB.</small>{imageWarnings.newUserAvatar && <small className="form-error">{imageWarnings.newUserAvatar}</small>}</label>
+                    <input type="hidden" name="avatar"/>
+                    <label>Full Name <span aria-hidden="true">*</span><input name="name" placeholder="Enter full name" maxLength={200} required/></label>
+                    <label>Email Address <span aria-hidden="true">*</span><input name="email" type="email" placeholder="Enter email address" required/></label>
+                    <label>Phone Number <span className="muted">(Optional)</span><input name="phone" type="tel" inputMode="numeric" pattern="[0-9]*" autoComplete="tel" placeholder="Enter phone number" onInput={e => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, "").slice(0, 10); }}/></label>
+                  </section>
+                </div>
+                <div className="account-create-column">
+                  <section className="care-form-card">
+                    <div className="care-form-card-head"><span className="care-form-icon"><Building2 size={25}/></span><div><h3>Workspace</h3><p>Choose the workspace access for this account.</p></div></div>
+                    <label>Workspace <span aria-hidden="true">*</span><select aria-label="Workspace" name="role" value={createWorkspace} onChange={e => setCreateWorkspace(e.target.value)}><option value="physiotherapist">Physiotherapist</option><option value="psychologist">Psychologist</option><option value="admin">Administrator</option></select></label>
+                    <p className="form-note">The user will have access based on their role and permissions.</p>
+                  </section>
+                  <section className="care-form-card">
+                    <div className="care-form-card-head"><span className="care-form-icon"><ShieldCheck size={25}/></span><div><h3>Account &amp; Branding</h3><p>Set secure access and optional practitioner branding.</p></div></div>
+                    <label>Initial Password <span aria-hidden="true">*</span><input name="password" type="password" autoComplete="new-password" minLength={8} maxLength={15} placeholder="Enter a secure password" required/></label>
+                    <small className="muted password-hint">Use at least 8 characters, including letters and numbers.</small>
+                    {createWorkspace === "physiotherapist" || createWorkspace === "psychologist" ? <label>Practice / Report Logo <span className="muted">(Optional)</span><input name="practitioner_logo_file" type="file" accept="image/png,image/jpeg" onChange={e => { const file=e.currentTarget.files?.[0]; const hidden=e.currentTarget.form?.elements.namedItem("practitioner_logo") as HTMLInputElement | null; readImageFile("newUserLogo", MAX_IMAGE_MB, file, hidden, e.currentTarget); }}/><input type="hidden" name="practitioner_logo"/><small className="muted upload-hint">Up to {MAX_IMAGE_MB} MB. Used on this clinician&apos;s reports and invoices instead of the MindSpine logo.</small>{imageWarnings.newUserLogo && <small className="form-error">{imageWarnings.newUserLogo}</small>}</label> : <input type="hidden" name="practitioner_logo" value=""/>}
+                  </section>
+                </div>
+              </section>
+              <div className="care-modal-actions"><button type="button" className="button secondary" onClick={() => setDialog(null)} disabled={pending}>Cancel</button><button className="button primary" disabled={pending}>{pending ? "Creating…" : "Create User"}</button></div>
             </form>))}
           {dialog.kind === "editPatient" && (<form className="care-form patient-edit-form" onSubmit={e => {
                     e.preventDefault();
@@ -1569,6 +1752,7 @@ export default function Workspace({ data }: {
                         gender: String(f.get("gender") || ""),
                         history: String(f.get("history") || ""),
                         referral_source: String(f.get("referral_source") || ""),
+                        avatar: String(f.get("avatar") || ""),
                     };
                     setToast(null);
                     start(async () => {
@@ -1576,12 +1760,14 @@ export default function Workspace({ data }: {
                         setToast(result);
                         if (result.ok) {
                             router.refresh();
-                            setDialog({ kind: "patient", patient: { ...dialog.patient, ...payload } });
+                            setDialog({ kind: "patient", patient: { ...dialog.patient, ...payload, avatar: payload.avatar === "__REMOVE__" ? "" : payload.avatar || dialog.patient.avatar } });
                         }
                     });
                 }}>
               <section className="care-form-card">
                 <div className="care-form-card-head"><span className="care-form-icon"><Users size={24}/></span><div><h3>Patient Information</h3><p>Update the patient profile used across appointments and records.</p></div></div>
+                <div className="patient-edit-avatar-row"><span className="patient-edit-avatar-preview"><Avatar name={dialog.patient.name} avatar={dialog.patient.avatar} size="large"/><Avatar name={dialog.patient.name} size="large"/></span><label className="upload-trigger">Change Profile Picture <span className="muted">(Optional)</span><input name="avatar_file" type="file" accept="image/png,image/jpeg" onChange={e => { const file=e.currentTarget.files?.[0]; const hidden=e.currentTarget.form?.elements.namedItem("avatar") as HTMLInputElement | null; readImageFile("editPatientAvatar", MAX_IMAGE_MB, file, hidden, e.currentTarget); const row=e.currentTarget.form?.querySelector(".patient-edit-avatar-row") as HTMLElement | null; row?.classList.remove("photo-removed"); const removedNote=e.currentTarget.form?.querySelector(".avatar-removed-note") as HTMLElement | null; if (removedNote) removedNote.hidden = true; }}/><small className="muted upload-hint">Up to {MAX_IMAGE_MB} MB.</small>{imageWarnings.editPatientAvatar && <small className="form-error">{imageWarnings.editPatientAvatar}</small>}<small className="muted avatar-removed-note" hidden>Photo will be removed when you save.</small></label>{dialog.patient.avatar && <button type="button" className="button secondary remove-avatar-button" onClick={e => { const form = e.currentTarget.form ?? e.currentTarget.closest("form"); if (!form) return; const hidden = form.elements.namedItem("avatar") as HTMLInputElement | null; const fileInput = form.elements.namedItem("avatar_file") as HTMLInputElement | null; const row = form.querySelector(".patient-edit-avatar-row") as HTMLElement | null; const removedNote = form.querySelector(".avatar-removed-note") as HTMLElement | null; if (hidden) hidden.value = "__REMOVE__"; if (fileInput) fileInput.value = ""; row?.classList.add("photo-removed"); if (removedNote) removedNote.hidden = false; }}><Trash2 size={14}/>Remove Photo</button>}</div>
+                <input type="hidden" name="avatar"/>
                 <div className="care-field-grid two-columns">
                   <label>Full Name <span aria-hidden="true">*</span><input name="name" defaultValue={dialog.patient.name} maxLength={200} required/></label>
                   <label>Email<input value={dialog.patient.email} disabled readOnly/></label>
@@ -1594,6 +1780,44 @@ export default function Workspace({ data }: {
               </section>
               <div className="care-modal-actions"><button type="button" className="button secondary" onClick={() => setDialog({ kind: "patient", patient: dialog.patient })} disabled={pending}>Cancel</button><button className="button primary" disabled={pending}>{pending ? "Saving…" : "Save Patient"}</button></div>
             </form>)}
+          {dialog.kind === "editStaffUser" && (() => { const person = dialog.user; const isClinician = person.role === "practitioner"; return <form className="care-form patient-edit-form" onSubmit={e => {
+                    e.preventDefault();
+                    const f = new FormData(e.currentTarget);
+                    const payload = {
+                        id: person.id,
+                        name: String(f.get("name") || ""),
+                        phone: String(f.get("phone") || ""),
+                        specialty: isClinician ? String(f.get("specialty") || "") : "",
+                        practitioner_logo: String(f.get("practitioner_logo") || ""),
+                    };
+                    setToast(null);
+                    start(async () => {
+                        const result = await mutate("staffProfile", payload);
+                        setToast(result);
+                        if (result.ok) {
+                            router.refresh();
+                            setDialog({ kind: "staffUser", user: { ...person, name: payload.name, phone: payload.phone, specialty: isClinician ? payload.specialty as User["specialty"] : person.specialty, practitioner_logo: payload.practitioner_logo || person.practitioner_logo } });
+                        }
+                    });
+                }}>
+              <section className="care-form-card">
+                <div className="care-form-card-head"><span className="care-form-icon"><Users size={24}/></span><div><h3>Profile Details</h3><p>Update this account's name and contact details.</p></div></div>
+                <div className="care-field-grid two-columns">
+                  <label>Full Name <span aria-hidden="true">*</span><input name="name" defaultValue={person.name} maxLength={200} required/></label>
+                  <label>Email<input value={person.email} disabled readOnly/></label>
+                  <label>Phone <span className="muted">(Optional)</span><input name="phone" type="tel" inputMode="numeric" pattern="[0-9]*" defaultValue={person.phone} onInput={e => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, "").slice(0, 10); }}/></label>
+                  <label>Workspace<input value={person.role === "admin" ? "Administrator" : clinicianLabel(person.specialty)} disabled readOnly/></label>
+                </div>
+                {isClinician && <label>Specialty<select name="specialty" defaultValue={person.specialty}><option value="physiotherapist">Physiotherapist</option><option value="psychologist">Psychologist</option></select></label>}
+              </section>
+              {isClinician && <section className="care-form-card">
+                <div className="care-form-card-head"><span className="care-form-icon"><FileText size={24}/></span><div><h3>Practice / Report Logo</h3><p>Used on invoices and reports instead of the MindSpine logo.</p></div></div>
+                {person.practitioner_logo && <img src={person.practitioner_logo} alt="Current practice logo" style={{ maxHeight: 60, marginBottom: 10 }}/>}
+                <label>Replace Logo <span className="muted">(Optional)</span><input name="practitioner_logo_file" type="file" accept="image/png,image/jpeg" onChange={e => { const file=e.currentTarget.files?.[0]; const hidden=e.currentTarget.form?.elements.namedItem("practitioner_logo") as HTMLInputElement | null; readImageFile("editStaffLogo", MAX_IMAGE_MB, file, hidden, e.currentTarget); }}/><small className="muted upload-hint">Up to {MAX_IMAGE_MB} MB.</small>{imageWarnings.editStaffLogo && <small className="form-error">{imageWarnings.editStaffLogo}</small>}</label>
+                <input type="hidden" name="practitioner_logo"/>
+              </section>}
+              <div className="care-modal-actions"><button type="button" className="button secondary" onClick={() => setDialog({ kind: "staffUser", user: person })} disabled={pending}>Cancel</button><button className="button primary" disabled={pending}>{pending ? "Saving…" : "Save Changes"}</button></div>
+            </form>; })()}
           {dialog.kind === "schedule" && (<>
               <form className="care-form availability-form" onSubmit={e => {
                     e.preventDefault();
@@ -1640,8 +1864,8 @@ export default function Workspace({ data }: {
                   </button>
                 </div>
               </form>
-              {(() => { const openSlots = data.slots.filter((s) => !s.booked && new Date(s.starts_at).getTime() > Date.now()); return (<>
-                <div className="availability-list-head"><h3 className="spaced">Upcoming Availability</h3><p>Manage or remove your upcoming available slots.</p></div>
+              {(() => { const openSlots = data.slots.filter((s) => new Date(s.starts_at).getTime() > Date.now()); return (<>
+                <div className="availability-list-head"><h3 className="spaced">Upcoming Availability</h3><p>Manage or remove your upcoming available slots. Booked slots can&apos;t be removed here.</p></div>
                 <div className="slot-list">
                   {openSlots.length ? openSlots.slice(0, slotsShown).map((s) => (<div className="slot-row" key={s.id}>
                       <span>
@@ -1650,9 +1874,9 @@ export default function Workspace({ data }: {
                         </strong>
                         <small>{s.practitioner}</small>
                       </span>
-                      <button className="icon-button danger-outline" disabled={pending} onClick={() => setDeleteSlotTarget({ id: s.id, label: `${date(s.starts_at)} · ${time(s.starts_at)}` })}>
+                      {s.booked ? <Badge tone="confirmed">Booked</Badge> : <button className="icon-button danger-outline" disabled={pending} onClick={() => setDeleteSlotTarget({ id: s.id, label: `${date(s.starts_at)} · ${time(s.starts_at)}` })}>
                         <span className="sr-only">Remove</span><Trash2 size={16}/>
-                      </button>
+                      </button>}
                     </div>)) : <p className="empty-detail-copy">No available slots yet. Add one above.</p>}
                 </div>
                 {openSlots.length > slotsShown && <button type="button" className="button secondary full" onClick={() => setSlotsShown(slotsShown + 10)}>Show 10 more ({openSlots.length - slotsShown} remaining)</button>}
@@ -1680,7 +1904,7 @@ export default function Workspace({ data }: {
                   </div>
                 </div>)}
             </>)}
-          {dialog.kind === "patient" && (() => { const patientVisits = patientAppointments(dialog.patient.id); const completedCount = patientCompletedVisits(dialog.patient.id); const next = patientNextAppointment(dialog.patient.id); const lastVisit = patientLastVisit(dialog.patient.id); const files = data.files.filter((f) => f.patient_id === dialog.patient.id); const patientNotes = data.notes.filter((n) => n.patient_id === dialog.patient.id).sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at)); return <div className="patient-detail-view"><div className="detail-hero patient-detail-hero"><div className="person detail-person"><Avatar name={dialog.patient.name} size="large"/><div><h3>{dialog.patient.name}</h3><p>{patientCode(dialog.patient)}</p></div></div><div className="detail-contact-list"><span><Mail size={17}/>{dialog.patient.email}</span><span><Clock3 size={17}/>{dialog.patient.phone || "No phone number recorded"}</span><span><CalendarDays size={17}/>{dialog.patient.date_of_birth ? date(dialog.patient.date_of_birth, { day: "2-digit", month: "short", year: "numeric" }) : "Date of birth not recorded"}</span><span><Users size={17}/>{dialog.patient.gender || "Gender not recorded"}</span>{dialog.patient.referral_source && <span><ExternalLink size={17}/>Referred via {dialog.patient.referral_source}</span>}</div><div className="patient-stat-strip"><span><strong>{completedCount}</strong><small>Completed visits</small></span><span><strong>{next ? date(next.starts_at, { day: "2-digit", month: "short", year: "numeric" }) : "--"}</strong><small>Next appointment</small></span><span><strong>{lastVisit ? date(lastVisit.starts_at, { day: "2-digit", month: "short", year: "numeric" }) : "--"}</strong><small>Last visit</small></span><span><strong>{files.length}</strong><small>Documents</small></span></div></div><div className="detail-grid patient-detail-grid"><section className="detail-card"><div className="detail-card-head"><CalendarDays size={19}/><h3>Medical History</h3></div><p className="empty-detail-copy">{dialog.patient.history || "No medical history recorded yet. Add relevant medical history, past injuries, conditions or other clinical information."}</p></section><section className="detail-card"><div className="detail-card-head"><FileText size={19}/><h3>Current Concerns / Notes</h3></div>{patientNotes.length ? <><p className="empty-detail-copy">{patientNotes[0].notes}</p><small className="muted">{date(patientNotes[0].created_at, { day: "numeric", month: "short", year: "numeric" })} · {patientNotes[0].practitioner}{patientNotes.length > 1 ? ` · ${patientNotes.length} notes on file` : ""}</small></> : <p className="empty-detail-copy">No current concerns recorded yet. Document the patient's current concerns, goals and any other important notes.</p>}</section><section className="detail-card"><div className="detail-card-head"><FileText size={19}/><h3>Clinical Documents</h3></div>{files.length ? files.map((f) => <a className="file-row" key={f.id} href={'/api/files?id=' + f.id + '&download=1'}><Paperclip size={15}/>{f.name}<Download size={15}/></a>) : <p className="empty-detail-copy">No documents uploaded yet. Upload reports, prescriptions, assessment notes or other relevant files.</p>}{isDoctor && <button type="button" className="button secondary" onClick={() => { setUploadDefaultPatientId(dialog.patient.id); setDialog(null); setShowUploadPanel(true); }}><Upload size={15}/>Upload document</button>}</section><section className="detail-card"><div className="detail-card-head"><Clock3 size={19}/><h3>Visit History</h3></div>{patientVisits.length ? patientVisits.map((a) => <div className="visit-row" key={a.id}><span><strong>{date(a.starts_at, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</strong><small>{time(a.starts_at)} - {time(appointmentEnd(a))}</small></span><span><strong>{a.service}</strong><small>{a.practitioner}</small></span><Badge tone={isOverdue(a) ? "overdue" : a.status}>{appointmentStatusLabel(a)}</Badge></div>) : <p className="empty-detail-copy">No visit history recorded yet.</p>}</section></div><div className="detail-actions-bar"><button type="button" className="button secondary" onClick={() => setDialog({ kind: "editPatient", patient: dialog.patient })}><FileText size={16}/>Edit Patient</button><button className="button primary" onClick={() => openBook(undefined, dialog.patient)}><CalendarDays size={16}/>Book Appointment</button><button type="button" className="button danger" onClick={() => { const target = dialog.patient; setDialog(null); setDeletePatientTarget({ id: target.id, name: target.name }); }}><Trash2 size={16}/>Delete Patient</button></div></div>; })()}
+          {dialog.kind === "staffUser" && (() => { const person = dialog.user; const role = person.role === "admin" ? "Administrator" : clinicianLabel(person.specialty); const canBrand = person.role === "practitioner"; return <div className="staff-account-detail"><div className="staff-detail-hero"><div className="person detail-person"><Avatar name={person.name} avatar={person.avatar} size="large"/><div><h3>{person.name}</h3><p>{person.email}</p><div className="staff-badges"><Badge>{role}</Badge><Badge tone={person.active ? "completed" : "cancelled"}>{person.active ? "Active" : "Inactive"}</Badge></div></div></div><div className="staff-detail-actions"><button type="button" className="button secondary" onClick={() => setDialog({ kind: "editStaffUser", user: person })}><Pencil size={16}/>Edit User</button><button type="button" className="button secondary" onClick={() => setDialog({ kind: "reset", user: person })}><ShieldCheck size={16}/>Reset Password</button>{person.id !== u.id && <button type="button" className="button danger" disabled={pending} onClick={() => action("toggleUser", { id: person.id }, false)}>{person.active ? "Deactivate" : "Reactivate"}</button>}</div></div><div className="staff-detail-grid"><section className="staff-detail-section"><h4><Users size={18}/>Profile Details</h4><div className="staff-detail-row"><span>Full Name</span><strong>{person.name}</strong></div><div className="staff-detail-row"><span>Account Created</span><strong>{person.created_at ? date(person.created_at, { day: "2-digit", month: "short", year: "numeric" }) : "—"}</strong></div></section><section className="staff-detail-section"><h4><Mail size={18}/>Contact Information</h4><div className="staff-detail-row"><span>Email Address</span><strong className="staff-detail-value">{person.email || "Not provided"}</strong></div><div className="staff-detail-row"><span>Phone Number</span><strong>{person.phone || "Not provided"}</strong></div></section><section className="staff-detail-section"><h4><Building2 size={18}/>Workspace / Role</h4><div className="staff-role-panel"><span>Workspace</span><strong>{role}</strong></div></section><section className="staff-detail-section"><h4><ShieldCheck size={18}/>Account Access <Badge tone={person.active ? "completed" : "cancelled"}>{person.active ? "Active" : "Inactive"}</Badge></h4><p>This user has access to the selected workspace based on their role and permissions.</p></section>{canBrand && <section className="staff-detail-section staff-logo-section"><h4><FileText size={18}/>Practice / Report Logo</h4>{person.practitioner_logo ? <img src={person.practitioner_logo} alt="Practice logo"/> : <div className="staff-logo-empty">MindSpine default branding<br/><small>No custom logo uploaded.</small></div>}<p>Used on invoices and report generation for this practitioner.</p></section>}<section className="staff-detail-section"><h4><CalendarDays size={18}/>Activity / Access Summary</h4><div className="staff-detail-row"><span>Account Status</span><strong>{person.active ? "Active" : "Inactive"}</strong></div><div className="staff-detail-row"><span>Last Active</span><strong>{person.id === u.id ? "Today" : "—"}</strong></div></section></div></div>; })()}          {dialog.kind === "patient" && (() => { const patientVisits = patientAppointments(dialog.patient.id); const completedCount = patientCompletedVisits(dialog.patient.id); const next = patientNextAppointment(dialog.patient.id); const lastVisit = patientLastVisit(dialog.patient.id); const files = data.files.filter((f) => f.patient_id === dialog.patient.id); const patientNotes = data.notes.filter((n) => n.patient_id === dialog.patient.id).sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at)); return <div className="patient-detail-view"><div className="detail-hero patient-detail-hero"><div className="person detail-person"><Avatar name={dialog.patient.name} avatar={dialog.patient.avatar} size="large"/><div><h3>{dialog.patient.name}</h3><p>{patientCode(dialog.patient)}</p></div></div><div className="detail-contact-list"><span><Mail size={17}/>{dialog.patient.email}</span><span><Clock3 size={17}/>{dialog.patient.phone || "No phone number recorded"}</span><span><CalendarDays size={17}/>{dialog.patient.date_of_birth ? date(dialog.patient.date_of_birth, { day: "2-digit", month: "short", year: "numeric" }) : "Date of birth not recorded"}</span><span><Users size={17}/>{dialog.patient.gender || "Gender not recorded"}</span>{dialog.patient.referral_source && <span><ExternalLink size={17}/>Referred via {dialog.patient.referral_source}</span>}</div><div className="patient-stat-strip"><span><strong>{completedCount}</strong><small>Completed visits</small></span><span><strong>{next ? date(next.starts_at, { day: "2-digit", month: "short", year: "numeric" }) : "--"}</strong><small>Next appointment</small></span><span><strong>{lastVisit ? date(lastVisit.starts_at, { day: "2-digit", month: "short", year: "numeric" }) : "--"}</strong><small>Last visit</small></span><span><strong>{files.length}</strong><small>Documents</small></span></div></div><div className="detail-grid patient-detail-grid"><section className="detail-card"><div className="detail-card-head"><CalendarDays size={19}/><h3>Medical History</h3></div><p className="empty-detail-copy">{dialog.patient.history || "No medical history recorded yet. Add relevant medical history, past injuries, conditions or other clinical information."}</p></section><section className="detail-card"><div className="detail-card-head"><FileText size={19}/><h3>Current Concerns / Notes</h3></div>{patientNotes.length ? <><p className="empty-detail-copy">{patientNotes[0].notes}</p><small className="muted">{date(patientNotes[0].created_at, { day: "numeric", month: "short", year: "numeric" })} · {patientNotes[0].practitioner}{patientNotes.length > 1 ? ` · ${patientNotes.length} notes on file` : ""}</small></> : <p className="empty-detail-copy">No current concerns recorded yet. Document the patient's current concerns, goals and any other important notes.</p>}</section><section className="detail-card"><div className="detail-card-head"><FileText size={19}/><h3>Clinical Documents</h3></div>{files.length ? files.map((f) => <a className="file-row" key={f.id} href={'/api/files?id=' + f.id + '&download=1'}><Paperclip size={15}/>{f.name}<Download size={15}/></a>) : <p className="empty-detail-copy">No documents uploaded yet. Upload reports, prescriptions, assessment notes or other relevant files.</p>}{isDoctor && <button type="button" className="button secondary" onClick={() => { setUploadDefaultPatientId(dialog.patient.id); setDialog(null); setShowUploadPanel(true); }}><Upload size={15}/>Upload document</button>}</section><section className="detail-card"><div className="detail-card-head"><Clock3 size={19}/><h3>Visit History</h3></div>{patientVisits.length ? patientVisits.map((a) => <div className="visit-row" key={a.id}><span><strong>{date(a.starts_at, { weekday: "short", day: "numeric", month: "short", year: "numeric" })}</strong><small>{time(a.starts_at)} - {time(appointmentEnd(a))}</small></span><span><strong>{a.service}</strong><small>{a.practitioner}</small></span><Badge tone={isOverdue(a) ? "overdue" : a.status}>{appointmentStatusLabel(a)}</Badge></div>) : <p className="empty-detail-copy">No visit history recorded yet.</p>}</section></div><div className="detail-actions-bar"><button type="button" className="button secondary" onClick={() => setDialog({ kind: "editPatient", patient: dialog.patient })}><FileText size={16}/>Edit Patient</button><button className="button primary" onClick={() => openBook(undefined, dialog.patient)}><CalendarDays size={16}/>Book Appointment</button><button type="button" className="button danger" onClick={() => { const target = dialog.patient; setDialog(null); setDeletePatientTarget({ id: target.id, name: target.name }); }}><Trash2 size={16}/>Delete Patient</button></div></div>; })()}
         </Modal>)}
       {showUploadPanel && isDoctor && (<Modal className="care-modal upload-document-modal" title="Upload Document" subtitle="Upload clinical documents, reports, scans or forms for the patient." onClose={() => { setShowUploadPanel(false); setUploadDefaultPatientId(undefined); }}>
           <UploadDocumentForm patients={data.patients} appointments={data.appointments} patientCode={patientCode} defaultPatientId={uploadDefaultPatientId} onCancel={() => { setShowUploadPanel(false); setUploadDefaultPatientId(undefined); }} onDone={() => { setShowUploadPanel(false); setUploadDefaultPatientId(undefined); setToast({ ok: true, message: "Document uploaded successfully." }); router.refresh(); }}/>
@@ -1722,10 +1946,28 @@ export default function Workspace({ data }: {
               <Trash2 size={30}/>
             </div>
             <h2 id="delete-patient-title">Delete {deletePatientTarget.name}?</h2>
-            <p id="delete-patient-description">This deactivates the patient&apos;s account and removes them from your Patients list. Their appointments and clinical records are kept for your audit history.</p>
+            <p id="delete-patient-description">This removes the patient from your Patients list and Team &amp; Access. Their appointments and clinical records are kept for your audit history.</p>
             <div className="logout-confirmation-actions">
               <button type="button" className="logout-cancel" autoFocus onClick={() => setDeletePatientTarget(null)} disabled={pending}>Cancel</button>
               <button type="button" className="logout-confirm" disabled={pending} onClick={() => { const target = deletePatientTarget; action("deletePatient", { id: target.id }, false); setDeletePatientTarget(null); }}>{pending ? "Deleting…" : "Delete Patient"}</button>
+            </div>
+          </div>
+        </div>)}
+      {deleteStaffTarget && (<div className="logout-modal-backdrop" role="presentation" onKeyDown={(event) => {
+          if (event.key === "Escape") setDeleteStaffTarget(null);
+        }}>
+          <div className="logout-confirmation" role="dialog" aria-modal="true" aria-labelledby="delete-staff-title" aria-describedby="delete-staff-description">
+            <button type="button" className="logout-close" aria-label="Cancel" onClick={() => setDeleteStaffTarget(null)} disabled={pending}>
+              <X size={17}/>
+            </button>
+            <div className="logout-confirmation-icon" aria-hidden="true">
+              <Trash2 size={30}/>
+            </div>
+            <h2 id="delete-staff-title">Delete {deleteStaffTarget.name}?</h2>
+            <p id="delete-staff-description">This removes this account from Team &amp; Access and cancels any upcoming appointments tied to them. Past appointments and records are kept for your audit history.</p>
+            <div className="logout-confirmation-actions">
+              <button type="button" className="logout-cancel" autoFocus onClick={() => setDeleteStaffTarget(null)} disabled={pending}>Cancel</button>
+              <button type="button" className="logout-confirm" disabled={pending} onClick={() => { const target = deleteStaffTarget; action("deleteStaffUser", { id: target.id }, false); setDeleteStaffTarget(null); }}>{pending ? "Deleting…" : "Delete Account"}</button>
             </div>
           </div>
         </div>)}

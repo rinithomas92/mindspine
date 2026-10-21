@@ -145,7 +145,7 @@ export async function settings() {
     return values;
 }
 
-export async function createManagedUser(actor: User, d: {name:string;email:string;role:'patient'|'psychologist'|'physiotherapist'|'admin';password:string;phone:string;date_of_birth?:string;gender?:string;referral_source?:string}) {
+export async function createManagedUser(actor: User, d: {name:string;email:string;role:'patient'|'psychologist'|'physiotherapist'|'admin';password:string;phone:string;date_of_birth?:string;gender?:string;referral_source?:string;avatar?:string;practitioner_logo?:string}) {
     authorize(actor.role === 'admin' || (actor.role === 'practitioner' && d.role === 'patient'), 'Only administrators can add staff. Clinicians may add patients.');
     return transaction(async () => {
         const existing=await one<{active:number}>('SELECT active FROM users WHERE email=?', d.email);
@@ -154,7 +154,7 @@ export async function createManagedUser(actor: User, d: {name:string;email:strin
             : 'This email is already registered. Contact an administrator to manage the existing account.');
         const userId=id('USR');
         const clinical=['psychologist','physiotherapist'].includes(d.role);
-        await run('INSERT INTO users(id,name,email,role,password,phone,date_of_birth,gender,referral_source,specialty) VALUES (?,?,?,?,?,?,?,?,?,?)',userId,d.name,d.email,clinical?'practitioner':d.role,hashPassword(d.password),d.phone,d.date_of_birth ?? '',d.gender ?? '',d.referral_source ?? '',clinical?d.role:'');
+        await run('INSERT INTO users(id,name,email,role,password,phone,date_of_birth,gender,referral_source,specialty,avatar,practitioner_logo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',userId,d.name,d.email,clinical?'practitioner':d.role,hashPassword(d.password),d.phone,d.date_of_birth ?? '',d.gender ?? '',d.referral_source ?? '',clinical?d.role:'',d.avatar ?? '',clinical ? (d.practitioner_logo ?? '') : '');
         if(actor.role==='practitioner')await run('INSERT INTO care_links(patient_id,clinician_id) VALUES (?,?)',userId,actor.id);
         await audit(actor.id,'user.created',userId);
         return userId;
