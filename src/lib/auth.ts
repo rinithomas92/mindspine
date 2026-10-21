@@ -7,7 +7,7 @@ export async function currentUser(): Promise<User | null> {
     const token = (await cookies()).get("mindspine_session")?.value;
     if (!token)
         return null;
-    return (await one<User>("SELECT u.id,u.name,u.email,u.role,u.specialty,u.active,u.phone,u.history,u.created_at FROM users u JOIN sessions s ON u.id=s.user_id WHERE s.token=? AND s.expires_at>? AND u.active=1", digest(token), Date.now()) ?? null);
+    return (await one<User>("SELECT u.id,u.name,u.email,u.role,u.specialty,u.active,u.phone,u.date_of_birth,u.gender,u.referral_source,u.history,u.avatar,u.practitioner_logo,u.created_at FROM users u JOIN sessions s ON u.id=s.user_id WHERE s.token=? AND s.expires_at>? AND u.active=1", digest(token), Date.now()) ?? null);
 }
 export async function requireUser() {
     const user = await currentUser();

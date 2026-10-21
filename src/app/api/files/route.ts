@@ -16,10 +16,11 @@ export async function GET(request: Request) {
     if (!file || !await canAccessPatient(user, file.patient_id))
         return Response.json({ error: "File not found." }, { status: 404 });
     await audit(user.id, "file.downloaded", file.id);
+    const forceDownload = new URL(request.url).searchParams.get("download") === "1";
     return new Response(new Uint8Array(file.content), {
         headers: {
             "Content-Type": file.mime,
-            "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+            "Content-Disposition": `${forceDownload ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
@@ -64,8 +65,12 @@ export async function POST(request: Request) {
                     : null;
         if (!mime || mime !== file.type)
             return Response.json({ error: "Only valid PDF, PNG, and JPEG files are supported." }, { status: 400 });
+        const rawAppointmentId = String(form.get("appointmentId") || "");
+        const appointmentId = rawAppointmentId && await one("SELECT id FROM appointments WHERE id=? AND patient_id=?", rawAppointmentId, patientId) ? rawAppointmentId : null;
+        const documentType = String(form.get("documentType") || "").trim().slice(0, 60);
+        const description = String(form.get("description") || "").trim().slice(0, 2000);
         const fileId = id("FILE");
-        await run("INSERT INTO files(id,patient_id,uploaded_by,name,mime,size,content) VALUES (?,?,?,?,?,?,?)", fileId, patientId, user.id, file.name.replace(/[\r\n\\/]/g, "_").slice(0, 180), mime, file.size, content);
+        await run("INSERT INTO files(id,patient_id,uploaded_by,name,mime,size,content,appointment_id,document_type,description) VALUES (?,?,?,?,?,?,?,?,?,?)", fileId, patientId, user.id, file.name.replace(/[\r\n\\/]/g, "_").slice(0, 180), mime, file.size, content, appointmentId, documentType, description);
         await audit(user.id, "file.uploaded", fileId);
         return Response.json({ message: "Document uploaded successfully." });
     }

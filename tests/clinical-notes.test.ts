@@ -26,17 +26,17 @@ test('migration preserves existing notes and dependent rehab records while allow
  assert.equal((await all('SELECT * FROM invoices')).length,0);
 });
 test('patient and note creation is atomic and grants only patient access',async()=>{
- const result=await saveClinicalNote(clinician,{...draft,newPatient:{name:'New patient',email:'new@example.test',password:'Demo-test-password',phone:''}});
+ const result=await saveClinicalNote(clinician,{...draft,newPatient:{name:'New patient',email:'new@example.test',password:'Demo-test-password1',phone:''}});
  assert.equal((await one<User>('SELECT * FROM users WHERE id=?',result.patientId))!.role,'patient');
  assert(await one('SELECT * FROM care_links WHERE patient_id=? AND clinician_id=?',result.patientId,'c'));
- await assert.rejects(saveClinicalNote(clinician,{...draft,newPatient:{name:'Duplicate',email:'new@example.test',password:'Demo-test-password'}}));
+ await assert.rejects(saveClinicalNote(clinician,{...draft,newPatient:{name:'Duplicate',email:'new@example.test',password:'Demo-test-password1'}}));
  await run("CREATE TRIGGER fail_test_note BEFORE INSERT ON notes WHEN NEW.diagnosis='force rollback' BEGIN SELECT RAISE(ABORT,'test rollback'); END;");
- await assert.rejects(saveClinicalNote(clinician,{...draft,diagnosis:'force rollback',newPatient:{name:'Rollback',email:'rollback@example.test',password:'Demo-test-password'}}));
+ await assert.rejects(saveClinicalNote(clinician,{...draft,diagnosis:'force rollback',newPatient:{name:'Rollback',email:'rollback@example.test',password:'Demo-test-password1'}}));
  assert.equal(await one("SELECT id FROM users WHERE email='rollback@example.test'"),undefined);
 });
 test('rejects unrelated patients, mismatched visits and non-clinician authors',async()=>{
  await assert.rejects(saveClinicalNote(clinician,{...draft,patientId:'p2'}));
  await assert.rejects(saveClinicalNote(clinician,{...draft,patientId:'p2',appointmentId:'a'}));
  await assert.rejects(saveClinicalNote((await one<User>("SELECT * FROM users WHERE id='p'"))!,{...draft,patientId:'p'}));
- await assert.rejects(saveClinicalNote(clinician,{...draft,patientId:'p',newPatient:{name:'No',email:'no@example.test',password:'Demo-test-password'}}));
+ await assert.rejects(saveClinicalNote(clinician,{...draft,patientId:'p',newPatient:{name:'No',email:'no@example.test',password:'Demo-test-password1'}}));
 });

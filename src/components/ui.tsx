@@ -1,11 +1,13 @@
 "use client";
-import { useEffect, useRef, useId } from "react";
+import { useEffect, useRef, useId, useState } from "react";
 import { X, ArrowUpRight, Inbox } from "lucide-react";
-export function Modal({ title, subtitle, children, onClose, }: {
-    title: string;
+import type { LucideIcon } from "lucide-react";
+export function Modal({ title, subtitle, children, onClose, className = "", }: {
+    title: React.ReactNode;
     subtitle?: string;
     children: React.ReactNode;
     onClose: () => void;
+    className?: string;
 }) {
     const ref = useRef<HTMLDialogElement>(null);
     const titleId = useId();
@@ -14,7 +16,7 @@ export function Modal({ title, subtitle, children, onClose, }: {
         el?.showModal();
         return () => el?.close();
     }, []);
-    return (<dialog className="modal" aria-labelledby={titleId} ref={ref} onCancel={(e) => {
+    return (<dialog className={`modal ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} ref={ref} onCancel={(e) => {
             e.preventDefault();
             onClose();
         }} onClick={(e) => {
@@ -26,7 +28,7 @@ export function Modal({ title, subtitle, children, onClose, }: {
           <h2 id={titleId}>{title}</h2>
           {subtitle && <p className="muted">{subtitle}</p>}
         </div>
-        <button className="icon-button" onClick={onClose} aria-label="Close dialog">
+        <button className="icon-button" onClick={onClose} aria-label="Close">
           <X size={21}/>
         </button>
       </div>
@@ -39,10 +41,15 @@ export function Badge({ children, tone = "", }: {
 }) {
     return <span className={"badge " + tone}>{children}</span>;
 }
-export function Avatar({ name, size = "" }: {
+export function Avatar({ name, size = "", avatar = "" }: {
     name: string;
     size?: string;
+    avatar?: string;
 }) {
+    const [failed, setFailed] = useState(false);
+    useEffect(() => setFailed(false), [avatar]);
+    if (avatar && !failed)
+        return <img className={"avatar " + size} src={avatar} alt="" onError={() => setFailed(true)} />;
     return (<span className={"avatar " + size}>
       {name
             .replace(/^Dr\. /, "")
@@ -52,14 +59,17 @@ export function Avatar({ name, size = "" }: {
             .join("")}
     </span>);
 }
-export function Empty({ title, description, }: {
+export function Empty({ title, description, action, icon: Icon = Inbox, }: {
     title: string;
     description: string;
+    action?: React.ReactNode;
+    icon?: LucideIcon;
 }) {
     return (<div className="empty">
-      <Inbox size={30}/>
+      <Icon size={30} aria-hidden="true"/>
       <h3>{title}</h3>
       <p>{description}</p>
+      {action}
     </div>);
 }
 export function SectionHead({ title, description, action, onClick, }: {
@@ -84,7 +94,7 @@ export const money = (amount: number) => new Intl.NumberFormat("en-IN", {
     currency: "INR",
     maximumFractionDigits: 0,
 }).format(amount / 100);
-export const date = (value: string, options: Intl.DateTimeFormatOptions = { day: "numeric", month: "short" }) => new Intl.DateTimeFormat("en-IN", {
+export const date = (value: string, options: Intl.DateTimeFormatOptions = { day: "2-digit", month: "short", year: "numeric" }) => new Intl.DateTimeFormat("en-IN", {
     timeZone: "Asia/Kolkata",
     ...options,
 }).format(new Date(value.endsWith("Z") || value.includes("+")

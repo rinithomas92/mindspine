@@ -1,20 +1,21 @@
 "use server";
-import {savePhysioRecord} from "@/lib/physio-domain";
+import {savePhysioRecord, deletePhysioRecord} from "@/lib/physio-domain";
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireUser, createSession, destroySession } from "@/lib/auth";
 import { hashPassword, verifyPassword } from "@/lib/password";
-import {saveClinicalNote} from "@/lib/clinical-notes";
+import {saveClinicalNote, addProgressEntry, deleteClinicalNote, deleteProgressEntry} from "@/lib/clinical-notes";
 import { authInput, matchesPortal } from "@/lib/auth-input";
-import { one, run, id, transaction, audit, notify } from "@/lib/db";
-import { createManagedUser, authorize, book, changeAppointment, appointmentFor, takeRateLimit, } from "@/lib/domain";
+import { one, all, run, id, transaction, audit, notify } from "@/lib/db";
+import { createManagedUser, authorize, book, changeAppointment, editAppointmentDetails, deleteAppointment, appointmentFor, takeRateLimit, peekRateLimit, clearRateLimit, canAccessPatient, } from "@/lib/domain";
 import type { User, Invoice } from "@/lib/types";
-const text = z.string().trim().min(1).max(200);
+const text = z.string().trim().min(1, "This field is required.").max(200, "Must be 200 characters or fewer.");
 const email = z
-    .email()
-    .max(200)
+    .email("Enter a valid email address.")
+    .max(200, "Must be 200 characters or fewer.")
     .transform((v) => v.toLowerCase());
-const password = z.string().min(12, "Use at least 12 characters.").max(128);
+const password = z.string().min(8, "Use at least 8 characters, including letters and numbers.").max(15, "Password must be 15 characters or fewer.").regex(/^(?=.*[A-Za-z])(?=.*\d)/, "Use at least 8 characters, including letters and numbers.");
+const dob = z.string().trim().max(20).optional().default("").refine((v) => !v || new Date(v).getTime() <= Date.now(), "Date of birth cannot be in the future.");
 type Result = {
     ok: boolean;
     message: string;
@@ -28,10 +29,15 @@ function errorMessage(error: unknown) {
     return "Unable to save. Check your details and try again.";
 }
 export async function authenticate(payload: unknown): Promise<Result> {
+    const data = authInput.parse(payload);
+    const limitKey = "auth:" + data.email;
     try {
-        const data = authInput.parse(payload);
-        await takeRateLimit("auth:" + data.email);
+        await peekRateLimit(limitKey);
         const user = await one<User & { password: string }>("SELECT * FROM users WHERE email=?", data.email);
+        if (data.register && user && user.active === 0) {
+            await takeRateLimit(limitKey);
+            authorize(false, "This email was used by an account that has been removed. Contact your clinic administrator to reactivate it before registering again.");
+        }
         if (data.register && !user) {
             password.parse(data.password);
             const name = text.parse(data.name);
@@ -44,15 +50,18 @@ export async function authenticate(payload: unknown): Promise<Result> {
             await createSession(userId);
         }
         else {
-            authorize(user &&
-                verifyPassword(data.password, user.password) &&
-                user.active === 1, data.register
+            const valid = !!(user && verifyPassword(data.password, user.password) && user.active === 1 && (data.register || matchesPortal(user, data.portal)));
+            if (!valid) {
+                await takeRateLimit(limitKey);
+                authorize(user && verifyPassword(data.password, user.password) && user.active === 1, data.register
                     ? "We couldn’t sign you in with these details. If you already have an account, enter its original password. For a password reset, contact your clinic administrator."
                     : "Email or password is incorrect, or the account is inactive.");
-            if (!data.register) authorize(matchesPortal(user,data.portal), "This account belongs to a different workspace. Choose the matching sign-in option or contact your clinic administrator.");
-            await createSession(user.id);
-            await audit(user.id, "account.signed_in", user.id);
+                authorize(false, "This account belongs to a different workspace. Choose the matching sign-in option or contact your clinic administrator.");
+            }
+            await createSession(user!.id);
+            await audit(user!.id, "account.signed_in", user!.id);
         }
+        await clearRateLimit(limitKey);
         revalidatePath("/");
         return { ok: true, message: "Signed in." };
     }
@@ -91,12 +100,26 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 await changeAppointment(user, d.id, d.action, d.slotId);
                 break;
             }
+            case "editAppointment": {
+                const d = z.object({ id: text, service: text, reason: z.string().trim().max(2000).default("") }).parse(payload);
+                await editAppointmentDetails(user, d.id, d.service, d.reason);
+                break;
+            }
+            case "deleteAppointment": {
+                const d = z.object({ id: text }).parse(payload);
+                await deleteAppointment(user, d.id);
+                break;
+            }
             case "physio": {
                 await savePhysioRecord(user,payload);
                 break;
             }
             case "note": {
                 await saveClinicalNote(user,payload);
+                break;
+            }
+            case "progressEntry": {
+                await addProgressEntry(user,payload);
                 break;
             }
             case "publish": {
@@ -116,7 +139,6 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 break;
             }
             case "invoice": {
-                authorize(user.role === "admin");
                 const d = z
                     .object({
                     id: text,
@@ -124,6 +146,7 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                     reference: z.string().trim().min(3).max(200),
                 })
                     .parse(payload);
+                authorize(d.action === "paid" ? user.role === "admin" || user.role === "practitioner" : user.role === "admin");
                 await transaction(async () => {
                     const invoice = await one<Invoice>("SELECT * FROM invoices WHERE id=?", d.id);
                     authorize(invoice, "Invoice not found.");
@@ -146,7 +169,7 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 const d = z
                     .object({
                     name: text,
-                    phone: z.string().trim().max(30),
+                    phone: z.string().trim().regex(/^(\d{10})?$/, "Enter a valid 10-digit phone number.").optional().default(""),
                     history: z.string().trim().max(5000),
                 })
                     .parse(payload);
@@ -154,9 +177,38 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 await audit(user.id, "profile.updated", user.id);
                 break;
             }
+            case "patientProfile": {
+                authorize(user.role === "admin" || user.role === "practitioner");
+                const d = z
+                    .object({
+                    id: text,
+                    name: text,
+                    phone: z.string().trim().regex(/^(\d{10})?$/, "Enter a valid 10-digit phone number.").optional().default(""),
+                    date_of_birth: dob,
+                    gender: z.string().trim().max(40).optional().default(""),
+                    history: z.string().trim().max(5000).optional().default(""),
+                    referral_source: z.string().trim().max(100).optional().default(""),
+                    avatar: z.string().max(3_000_000).optional().default(""),
+                    practitioner_logo: z.string().max(3_000_000).optional().default(""),
+                })
+                    .parse(payload);
+                const target = await one<User>("SELECT * FROM users WHERE id=? AND role='patient' AND active=1", d.id);
+                authorize(target, "Patient not found.");
+                authorize(user.role === "admin" || await canAccessPatient(user, d.id), "You do not have access to this patient.");
+                await transaction(async () => {
+                    await run("UPDATE users SET name=?,phone=?,date_of_birth=?,gender=?,history=?,referral_source=? WHERE id=?", d.name, d.phone, d.date_of_birth, d.gender, d.history, d.referral_source, d.id);
+                    if (d.avatar === "__REMOVE__")
+                        await run("UPDATE users SET avatar='' WHERE id=?", d.id);
+                    else if (d.avatar)
+                        await run("UPDATE users SET avatar=? WHERE id=?", d.avatar, d.id);
+                    await audit(user.id, "patient.updated", d.id);
+                });
+                break;
+            }
             case "password": {
                 const d = z
-                    .object({ current: z.string().max(128), next: password })
+                    .object({ current: z.string().max(15), next: password, confirm: z.string().max(15) })
+                    .refine((v) => v.next === v.confirm, { message: "New password and confirmation do not match.", path: ["confirm"] })
                     .parse(payload);
                 const u = await one<{
                     password: string;
@@ -176,10 +228,39 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                     email,
                     role: z.enum(["patient", "psychologist", "physiotherapist", "admin"]),
                     password,
-                    phone: z.string().trim().max(30).optional().default(""),
+                    phone: z.string().trim().regex(/^(\d{10})?$/, "Enter a valid 10-digit phone number.").optional().default(""),
+                    date_of_birth: dob,
+                    gender: z.string().trim().max(40).optional().default(""),
+                    referral_source: z.string().trim().max(100).optional().default(""),
+                    avatar: z.string().max(3_000_000).optional().default(""),
+                    practitioner_logo: z.string().max(3_000_000).optional().default(""),
                 })
                     .parse(payload);
                 await createManagedUser(user,d);
+                break;
+            }
+            case "staffProfile": {
+                authorize(user.role === "admin");
+                const d = z
+                    .object({
+                    id: text,
+                    name: text,
+                    phone: z.string().trim().regex(/^(\d{10})?$/, "Enter a valid 10-digit phone number.").optional().default(""),
+                    specialty: z.enum(["psychologist", "physiotherapist", ""]).optional().default(""),
+                    practitioner_logo: z.string().max(3_000_000).optional().default(""),
+                })
+                    .parse(payload);
+                const target = await one<User>("SELECT * FROM users WHERE id=? AND active=1", d.id);
+                authorize(target, "User not found.");
+                authorize(target!.role === "admin" || target!.role === "practitioner", "Only clinician and administrator accounts can be edited here.");
+                await transaction(async () => {
+                    await run("UPDATE users SET name=?,phone=? WHERE id=?", d.name, d.phone, d.id);
+                    if (target!.role === "practitioner" && d.specialty)
+                        await run("UPDATE users SET specialty=? WHERE id=?", d.specialty, d.id);
+                    if (target!.role === "practitioner" && d.practitioner_logo)
+                        await run("UPDATE users SET practitioner_logo=? WHERE id=?", d.practitioner_logo, d.id);
+                    await audit(user.id, "user.updated", d.id);
+                });
                 break;
             }
             case "specialty": {
@@ -205,6 +286,66 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 });
                 break;
             }
+            case "shareRecord": {
+                const d = z.object({
+                    recordType: z.enum(["note", "physio", "invoice"]),
+                    channel: z.enum(["email", "whatsapp"]),
+                    id: text,
+                    contact: z.string().trim().min(1, "This field is required.").max(200),
+                }).refine((v) => v.channel === "email" ? /^\S+@\S+\.\S+$/.test(v.contact) : /^[+]?[0-9 ]{7,20}$/.test(v.contact), { message: "Enter a valid contact detail.", path: ["contact"] }).parse(payload);
+                let patientId: string;
+                if (d.recordType === "invoice") {
+                    const invoice = await one<{ patient_id: string }>("SELECT patient_id FROM invoices WHERE id=?", d.id);
+                    authorize(invoice, "Invoice not found.");
+                    authorize(user.role === "admin" || user.role === "practitioner" || await canAccessPatient(user, invoice.patient_id), "You do not have access to this invoice.");
+                    patientId = invoice.patient_id;
+                }
+                else {
+                    const table = d.recordType === "note" ? "notes" : "physio_records";
+                    const record = await one<{ patient_id: string }>(`SELECT patient_id FROM ${table} WHERE id=?`, d.id);
+                    authorize(record, "Record not found.");
+                    authorize(user.role === "admin" || await canAccessPatient(user, record.patient_id), "You do not have access to this record.");
+                    patientId = record.patient_id;
+                }
+                const label = d.recordType === "note" ? "clinical note" : d.recordType === "physio" ? "physiotherapy record" : "invoice";
+                const via = d.channel === "email" ? "email" : "WhatsApp";
+                await notify(patientId, `${d.recordType === "invoice" ? "Invoice" : "Care record"} shared via ${via}`, `A PDF copy of your ${label} was sent via ${via} to ${d.contact}.`);
+                await audit(user.id, `${d.recordType}.shared_${d.channel}`, d.id);
+                break;
+            }
+            case "deleteNote": {
+                const d = z.object({ id: text }).parse(payload);
+                await deleteClinicalNote(user, d.id);
+                break;
+            }
+            case "deleteProgressEntry": {
+                const d = z.object({ noteId: text, index: z.number().int().min(0) }).parse(payload);
+                await deleteProgressEntry(user, d.noteId, d.index);
+                break;
+            }
+            case "deletePhysioRecord": {
+                const d = z.object({ id: text }).parse(payload);
+                await deletePhysioRecord(user, d.id);
+                break;
+            }
+            case "deletePatient": {
+                authorize(user.role === "admin" || user.role === "practitioner");
+                const d = z.object({ id: text }).parse(payload);
+                const target = await one<User>("SELECT * FROM users WHERE id=? AND role='patient'", d.id);
+                authorize(target, "Patient not found.");
+                await transaction(async () => {
+                    const future = await all<{ id: string; practitioner_id: string }>("SELECT id,practitioner_id FROM appointments WHERE patient_id=? AND status='confirmed' AND starts_at>?", d.id, new Date().toISOString());
+                    for (const a of future) {
+                        await run("UPDATE appointments SET status='cancelled' WHERE id=?", a.id);
+                        await run("UPDATE invoices SET status='void' WHERE appointment_id=? AND status='unpaid'", a.id);
+                        await notify(a.practitioner_id, "Schedule updated", "An appointment has been cancelled because the patient was removed.");
+                    }
+                    await run("UPDATE users SET active=0 WHERE id=?", d.id);
+                    await run("DELETE FROM sessions WHERE user_id=?", d.id);
+                    await audit(user.id, "patient.deleted", d.id);
+                });
+                break;
+            }
             case "toggleUser": {
                 authorize(user.role === "admin");
                 const d = z.object({ id: text }).parse(payload);
@@ -218,6 +359,28 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 });
                 break;
             }
+            case "deleteStaffUser": {
+                authorize(user.role === "admin");
+                const d = z.object({ id: text }).parse(payload);
+                authorize(d.id !== user.id, "You cannot delete your own account.");
+                const target = await one<User>("SELECT * FROM users WHERE id=? AND (role='practitioner' OR role='admin')", d.id);
+                authorize(target, "User not found.");
+                await transaction(async () => {
+                    if (target!.role === "practitioner") {
+                        const future = await all<{ id: string; patient_id: string }>("SELECT id,patient_id FROM appointments WHERE practitioner_id=? AND status='confirmed' AND starts_at>?", d.id, new Date().toISOString());
+                        for (const a of future) {
+                            await run("UPDATE appointments SET status='cancelled' WHERE id=?", a.id);
+                            await run("UPDATE invoices SET status='void' WHERE appointment_id=? AND status='unpaid'", a.id);
+                            await notify(a.patient_id, "Schedule updated", "Your appointment has been cancelled because the clinician is no longer available.");
+                        }
+                        await run("DELETE FROM slots WHERE practitioner_id=?", d.id);
+                    }
+                    await run("UPDATE users SET active=0 WHERE id=?", d.id);
+                    await run("DELETE FROM sessions WHERE user_id=?", d.id);
+                    await audit(user.id, "user.deleted", d.id);
+                });
+                break;
+            }
             case "slot": {
                 authorize(user.role !== "patient");
                 const d = z
@@ -228,6 +391,11 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 const time = new Date(d.startsAt);
                 authorize(time.getTime() > Date.now(), "Choose a future time.");
                 authorize(time.getUTCMinutes() === 30 && time.getUTCSeconds() === 0, "Use an hourly clinic slot in India time, such as 10:00.");
+                const existingSlot = await one("SELECT id FROM slots WHERE practitioner_id=? AND starts_at=?", d.practitionerId, d.startsAt);
+                if (existingSlot) {
+                    const hasAppointment = await one("SELECT id FROM appointments WHERE practitioner_id=? AND starts_at=? AND status!='cancelled'", d.practitionerId, d.startsAt);
+                    authorize(false, hasAppointment ? "This time is already booked by a patient appointment." : "A slot already exists for this clinician at this time.");
+                }
                 await run("INSERT INTO slots VALUES (?,?,?)", id("SLT"), d.practitionerId, d.startsAt);
                 await audit(user.id, "schedule.slot_added", d.practitionerId);
                 break;
@@ -267,7 +435,34 @@ export async function mutate(action: string, payload: unknown): Promise<Result> 
                 throw new Error("Unknown action.");
         }
         revalidatePath("/");
-        return { ok: true, message: "Changes saved successfully." };
+        const messages: Record<string, string> = {
+            book: "Appointment booked successfully.",
+            appointment: "Appointment updated successfully.",
+            editAppointment: "Appointment details updated.",
+            deleteAppointment: "Appointment deleted.",
+            slot: "Availability slot added.",
+            deleteSlot: "Availability slot removed.",
+            note: "Clinical note saved.",
+            physio: "Record saved.",
+            progressEntry: "Progress entry saved.",
+            publish: "Record shared with patient.",
+            shareRecord: (payload as { channel?: string })?.channel === "whatsapp" ? "Sent to the patient via WhatsApp." : "Emailed to the patient.",
+            deleteNote: "Clinical note deleted.",
+            deleteProgressEntry: "Progress entry deleted.",
+            deletePhysioRecord: "Record deleted.",
+            user: "Account created successfully.",
+            patientProfile: "Patient profile updated.",
+            deletePatient: "Patient removed.",
+            profile: "Profile updated successfully.",
+            password: "Password updated successfully.",
+            invoice: "Payment recorded successfully.",
+            resetPassword: "Password reset successfully.",
+            settings: "Clinic settings saved.",
+            read: "Notifications updated.",
+            specialty: "Specialty updated.",
+            toggleUser: "Account status updated.",
+        };
+        return { ok: true, message: messages[action] || "Changes saved successfully." };
     }
     catch (e) {
         return { ok: false, message: errorMessage(e) };

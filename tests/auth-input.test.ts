@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { authInput } from "../src/lib/auth-input";
 
-const signup = { register: true, name: "Rini", email: "rini@example.test", password: "a-long-test-password" };
+const signup = { register: true, name: "Rini", email: "rini@example.test", password: "a-long-test-password1" };
 test("registration requires a nonblank name", () => {
   for (const name of ["", "   "]) {
     const result = authInput.safeParse({ ...signup, name });
